@@ -1,0 +1,597 @@
+#!/usr/bin/env python3
+"""
+spark — DGX Spark management CLI.
+
+Manages model serving, downloads, and status on a remote DGX Spark over SSH.
+
+Usage:
+    spark init                           First-time setup — create config file
+    spark status                         Show what's running (model, port, health)
+    spark models                         List downloaded models with sizes
+    spark serve <model> [--port N] [--ctx N] [--parallel N]
+                                         Start a model on llama-server
+    spark stop                           Stop (unload) the running model
+    spark logs                           Tail the server log  (Ctrl+C to exit)
+    spark download <repo> <name> <pattern>
+                                         Download a single model from HuggingFace
+    spark queue <repo> <name> <pattern> [<repo> <name> <pattern> ...]
+                                         Queue multiple downloads to run sequentially
+    spark logs-dl                        Tail the download queue log
+    spark open                           Open the built-in chat UI in browser
+
+Run `spark <command> --help` for full flag details on any command.
+
+Config: ~/.config/spark.json  (create with: spark init)
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+# ── Config ────────────────────────────────────────────────────────────────────
+
+CONFIG_PATH = Path.home() / ".config" / "spark.json"
+
+_DEFAULTS = {
+    "dgx_host":    "gx10-<id>.local",
+    "dgx_user":    "user",
+    "models_dir":  "~/models",
+    "server_bin":  "~/llama.cpp/build/bin/llama-server",
+    "server_log":  "~/llama-server.log",
+    "venv":        "~/llama-cpp-venv",
+    "hf_dl":       "~/hf_download.py",
+    "port":        30000,
+}
+
+def load_config() -> dict:
+    cfg = dict(_DEFAULTS)
+    # Env var overrides
+    env_map = {
+        "DGX_HOST":         "dgx_host",
+        "DGX_USER":         "dgx_user",
+        "SPARK_MODELS_DIR": "models_dir",
+        "SPARK_SERVER_BIN": "server_bin",
+        "SPARK_SERVER_LOG": "server_log",
+        "SPARK_VENV":       "venv",
+        "SPARK_HF_DL":      "hf_dl",
+        "SPARK_PORT":       "port",
+    }
+    for env, key in env_map.items():
+        if os.environ.get(env):
+            cfg[key] = int(os.environ[env]) if key == "port" else os.environ[env]
+    # File overrides
+    if CONFIG_PATH.exists():
+        try:
+            file_cfg = json.loads(CONFIG_PATH.read_text())
+            cfg.update(file_cfg)
+        except json.JSONDecodeError as e:
+            print(red(f"Config is not valid JSON ({CONFIG_PATH}): {e}"), file=sys.stderr)
+            sys.exit(1)
+    return cfg
+
+# ── Colors ────────────────────────────────────────────────────────────────────
+
+_TTY = sys.stdout.isatty() and os.environ.get("NO_COLOR") != "1"
+
+def _c(t, code): return f"\033[{code}m{t}\033[0m" if _TTY else t
+def bold(t):   return _c(t, "1")
+def dim(t):    return _c(t, "2")
+def red(t):    return _c(t, "31")
+def green(t):  return _c(t, "32")
+def yellow(t): return _c(t, "33")
+def cyan(t):   return _c(t, "36")
+
+def ok(t):   return green("✓") + " " + t
+def warn(t): return yellow("⚠") + " " + t
+def fail(t): return red("✗") + " " + t
+
+# ── SSH helpers ───────────────────────────────────────────────────────────────
+
+def ssh(cfg: dict, cmd: str, capture=True) -> str:
+    full = ["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}", cmd]
+    if capture:
+        r = subprocess.run(full, capture_output=True, text=True)
+        return r.stdout.strip()
+    subprocess.run(full)
+    return ""
+
+def ssh_screen(cfg: dict, session: str, cmd: str):
+    ssh(cfg, f'screen -dmS {session} bash -c {json.dumps(cmd)}', capture=False)
+
+# ── Commands ──────────────────────────────────────────────────────────────────
+
+def cmd_init(args, cfg):
+    """First-time setup — create ~/.config/spark.json.
+
+    Walks through each setting, showing the current default so you can
+    accept it by pressing Enter or type a new value.
+
+    Usage: spark init
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_init.__doc__)
+        return
+
+    print(bold("spark init — configure DGX Spark connection\n"))
+    print(f"  Config will be saved to: {cyan(str(CONFIG_PATH))}\n")
+
+    fields = [
+        ("dgx_host",   "DGX hostname or IP"),
+        ("dgx_user",   "SSH username"),
+        ("models_dir", "Models directory on DGX"),
+        ("server_bin", "llama-server binary path"),
+        ("server_log", "Server log file path"),
+        ("port",       "Server port"),
+    ]
+
+    new_cfg = {}
+    for key, label in fields:
+        current = cfg[key]
+        val = input(f"  {label} [{current}]: ").strip()
+        new_cfg[key] = (int(val) if key == "port" and val else current) if not val else val
+
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(new_cfg, indent=2) + "\n")
+    print(f"\n  {ok(f'Config saved to {CONFIG_PATH}')}")
+    print(f"\n  Test your setup with: {cyan('spark status')}")
+
+
+def cmd_status(args, cfg):
+    """Show what's currently running on the DGX.
+
+    Usage: spark status
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_status.__doc__)
+        return
+
+    host = cfg["dgx_host"]
+    port = cfg["port"]
+
+    print(bold("DGX Spark status"))
+
+    # Config file present?
+    if CONFIG_PATH.exists():
+        print(f"  Config   {ok(str(CONFIG_PATH))}")
+    else:
+        print(f"  Config   {warn('no config file — using defaults')}  Run: {cyan('spark init')}")
+
+    print(f"  Host     {cyan(host)}")
+
+    # SSH reachable?
+    r = subprocess.run(["ssh", "-o", "ConnectTimeout=5", "-o", "BatchMode=yes",
+                        f"{cfg['dgx_user']}@{host}", "echo ok"],
+                       capture_output=True, text=True)
+    if r.stdout.strip() != "ok":
+        print(f"  SSH      {fail('unreachable')}  Check host and SSH key")
+        return
+    print(f"  SSH      {ok('connected')}")
+
+    # Detect server type
+    llama_pid = ssh(cfg, "pgrep -f llama-server | head -1 || true")
+    vllm_pid  = ssh(cfg, "pgrep -f 'vllm.entrypoints' | head -1 || true")
+
+    if llama_pid:
+        print(f"  Server   {ok('llama-server')}  (pid {llama_pid})")
+        model_line = ssh(cfg, f"ps -p {llama_pid} -o args= 2>/dev/null || true")
+        if "--model" in model_line:
+            model_path = model_line.split("--model")[1].strip().split()[0]
+            print(f"  Model    {cyan(Path(model_path).name)}")
+        health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
+        if "ok" in health.lower() or "true" in health.lower():
+            print(f"  API      {ok(f'http://{host}:{port}/v1')}")
+            print(f"  Chat UI  {cyan(f'http://{host}:{port}')}  {dim('(llama-server built-in — open in browser)')}")
+        else:
+            print(f"  API      {warn('still loading...')}  Run: {cyan('spark logs')}")
+    elif vllm_pid:
+        print(f"  Server   {ok('vLLM')}  (pid {vllm_pid})")
+        health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
+        if "ok" in health.lower() or "true" in health.lower():
+            print(f"  API      {ok(f'http://{host}:{port}/v1')}")
+            print(f"  Chat UI  {dim('none built-in — use Open WebUI')}")
+        else:
+            print(f"  API      {warn('still loading...')}")
+    else:
+        print(f"  Server   {dim('not running')}  Run: {cyan('spark serve <model>')}")
+
+    # Disk
+    disk = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $4\" free of \"$2}}'")
+    if disk:
+        print(f"  Disk     {disk}")
+
+
+def _parse_quant(filename: str) -> str:
+    """Extract quant type from a GGUF filename, e.g. UD-Q4_K_XL, Q5_K_M."""
+    stem = Path(filename).stem  # drop .gguf
+    # Strip part suffix like -00001-of-00003
+    import re
+    stem = re.sub(r'-\d{5}-of-\d{5}$', '', stem)
+    # Quant is typically the last dash-separated token(s) matching the pattern
+    m = re.search(r'((?:UD-)?(?:IQ|Q)\d[\w_]+)$', stem, re.IGNORECASE)
+    return m.group(1) if m else stem.split('-')[-1]
+
+
+def _is_quant_dir(name: str) -> bool:
+    """True if a directory name looks like a quant subdirectory, not a model name."""
+    import re
+    return bool(re.match(r'^(UD-)?(IQ|Q)\d', name, re.IGNORECASE)) or name in ('BF16', 'FP8', 'MXFP4_MOE')
+
+
+def cmd_models(args, cfg):
+    """List downloaded models with quant and size.
+
+    Usage: spark models
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_models.__doc__)
+        return
+
+    print(bold("Downloaded models\n"))
+    output = ssh(cfg, f"find {cfg['models_dir']} -name '*.gguf' 2>/dev/null | sort")
+    if not output:
+        print(dim(f"  No models found in {cfg['models_dir']}"))
+        print(f"\n  Download one with: {cyan('spark download <repo> <name> <pattern>')}")
+        return
+
+    # Group files → model name, collapsing quant subdirs
+    models: dict[str, list[str]] = {}
+    for line in output.splitlines():
+        p = Path(line)
+        if _is_quant_dir(p.parent.name):
+            key = p.parent.parent.name   # quant subdir → use grandparent
+        else:
+            key = p.parent.name          # file directly in model dir
+        models.setdefault(key, []).append(line)
+
+    for name, files in sorted(models.items()):
+        model_path_remote = cfg['models_dir'].replace('~', '$HOME')
+        size = ssh(cfg, f"du -sh {model_path_remote}/{name} 2>/dev/null | cut -f1")
+        # Deduplicate quants (multi-part files share the same quant)
+        quants = sorted(set(_parse_quant(Path(f).name) for f in files))
+        parts  = len(files)
+        parts_note = f"  {dim(f'{parts} parts')}" if parts > 1 else ""
+        quant_str = cyan(", ".join(quants))
+        print(f"  {bold(name)}")
+        print(f"    quant   {quant_str}{parts_note}")
+        print(f"    size    {size}")
+        print(f"    serve   {dim(f'spark serve {name}')}")
+        print()
+
+    print(f"  Load a model: {cyan('spark serve <name>')}")
+
+
+def cmd_serve(args, cfg):
+    """Start (load) a model on llama-server.
+
+    Usage: spark serve <model> [options]
+
+    Arguments:
+      <model>        Matches against downloaded model directory names.
+                     Run 'spark models' to see available names.
+
+    Options:
+      --quant Q      Quant to load if multiple available  (e.g. UD-Q3_K_XL)
+      --port N       Port to bind  (default: 30000)
+      --ctx N        Context window size  (default: 8192)
+      --parallel N   Parallel request slots  (default: 4)
+
+    Flags always passed: --jinja (chat template tool calling) --tools (built-in tools in UI)
+
+    Examples:
+      spark serve model-b                        # prompts if multiple quants
+      spark serve model-b --quant UD-Q3_K_XL    # load specific quant directly
+    """
+    if not args or "--help" in args or "-h" in args:
+        print(cmd_serve.__doc__)
+        return
+
+    name  = args[0]
+    quant_filter = _flag_str(args, "--quant", None)
+    port  = _flag(args, "--port", cfg["port"])
+    ctx   = _flag(args, "--ctx",  8192)
+    par   = _flag(args, "--parallel", 4)
+
+    # Find all matching GGUFs, then pick the first part only per quant
+    all_matches = ssh(cfg, f"find {cfg['models_dir']} -name '*.gguf' 2>/dev/null | grep -i '{name}' | sort")
+    if not all_matches:
+        print(fail(f"No GGUF found matching '{name}'"))
+        print(f"  Run {cyan('spark models')} to see available models.")
+        sys.exit(1)
+
+    import re
+    all_files = all_matches.strip().splitlines()
+    # Keep only part 1 of multi-part sets (or single-file models)
+    # Part numbers are 5 digits: 00001, 00002, etc. — keep only 00001.
+    def is_first_part(p):
+        m = re.search(r'-(\d{5})-of-\d{5}', Path(p).name)
+        return int(m.group(1)) == 1 if m else True
+    entry_files = [f for f in all_files if is_first_part(f)]
+
+    if len(entry_files) > 1:
+        # Filter by --quant if provided
+        if quant_filter:
+            filtered = [f for f in entry_files if quant_filter.lower() in f.lower()]
+            if not filtered:
+                print(fail(f"No quant matching '{quant_filter}' found."))
+                print(f"  Available: {', '.join(cyan(_parse_quant(Path(f).name)) for f in entry_files)}")
+                sys.exit(1)
+            model_path = filtered[0]
+        else:
+            # Multiple quants — show them and ask
+            print(f"Multiple quants available for {bold(name)}:\n")
+            for i, f in enumerate(entry_files, 1):
+                q    = _parse_quant(Path(f).name)
+                mdir = cfg['models_dir'].replace('~', '$HOME')
+                size = ssh(cfg, f"du -sh {mdir}/{name} 2>/dev/null | cut -f1") if i == 1 else ""
+                print(f"  {bold(str(i))}  {cyan(q):<22} {dim(size)}")
+            print()
+            print(dim(f"  Tip: pass --quant <name> to skip this prompt"))
+            try:
+                choice = input(f"  Which quant? [1-{len(entry_files)}]: ").strip()
+                idx = int(choice) - 1
+                if not (0 <= idx < len(entry_files)):
+                    raise ValueError
+            except (ValueError, KeyboardInterrupt):
+                print(red("\nCancelled."))
+                sys.exit(1)
+            model_path = entry_files[idx]
+    else:
+        model_path = entry_files[0]
+
+    quant = _parse_quant(Path(model_path).name)
+    model_dir = Path(model_path).parent.name if _is_quant_dir(Path(model_path).parent.name) else Path(model_path).name
+
+    existing = ssh(cfg, "pgrep -f llama-server || true")
+    if existing:
+        print(yellow(f"⚠ Stopping existing server (pid {existing.split()[0]})..."))
+        ssh(cfg, "pkill -f llama-server || true; screen -S llama -X quit 2>/dev/null || true")
+        import time; time.sleep(2)
+
+    print(f"Loading {bold(name)}  {cyan(quant)}  on port {port}...")
+
+    serve_cmd = (
+        f"{cfg['server_bin']} "
+        f"--model {model_path} "
+        f"--port {port} --host 0.0.0.0 "
+        f"--ctx-size {ctx} --n-gpu-layers 999 --parallel {par} "
+        f"--jinja --tools all "
+        f"2>&1 | tee {cfg['server_log']}"
+    )
+    ssh_screen(cfg, "llama", serve_cmd)
+
+    print(dim("Waiting for server to be ready..."))
+    import time
+    for i in range(90):
+        time.sleep(2)
+        log = ssh(cfg, f"tail -3 {cfg['server_log']} 2>/dev/null || true")
+        if "server is listening" in log:
+            print(f"\n  {ok('Model loaded and server ready')}")
+            print(f"  API      http://{cfg['dgx_host']}:{port}/v1")
+            chat_url = f"http://{cfg['dgx_host']}:{port}"
+            print(f"  Chat UI  {cyan(chat_url)}  {dim('(open in browser)')}")
+            return
+        if "error" in log.lower() and "loading" not in log.lower():
+            print(fail(f"\nServer error — run: {cyan('spark logs')}"))
+            return
+        print(f"\r  Loading... ({(i+1)*2}s)", end="", flush=True)
+
+    print(f"\n  {warn('Still loading')} — run: {cyan('spark logs')} to watch progress")
+
+
+def cmd_stop(args, cfg):
+    """Stop (unload) the running model server.
+
+    Usage: spark stop
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_stop.__doc__)
+        return
+
+    pids = ssh(cfg, "pgrep -f 'llama-server|vllm' || true")
+    if not pids:
+        print(dim("Server is not running."))
+        return
+    ssh(cfg, "pkill -f 'llama-server|vllm' || true; screen -S llama -X quit 2>/dev/null || true")
+    print(ok("Server stopped. GPU memory freed."))
+
+
+def cmd_logs(args, cfg):
+    """Tail the llama-server log. Ctrl+C to exit.
+
+    Usage: spark logs [--lines N]
+
+    Options:
+      --lines N   Show last N lines before following  (default: 20)
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_logs.__doc__)
+        return
+
+    lines = _flag(args, "--lines", 20)
+    print(dim(f"Tailing server log on {cfg['dgx_host']} — Ctrl+C to stop\n"))
+    subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
+                    f"tail -n {lines} -f {cfg['server_log']}"])
+
+
+def cmd_download(args, cfg):
+    """Download a model from HuggingFace to the DGX.
+
+    Usage: spark download <repo_id> <local_name> <pattern>
+
+    Arguments:
+      <repo_id>      HuggingFace repo  (e.g. unsloth/model-a-GGUF)
+      <local_name>   Directory name under models_dir
+      <pattern>      Glob pattern to match files  (e.g. "*UD-Q4_K_XL*")
+
+    Examples:
+      spark download unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*"
+      spark download unsloth/model-c-GGUF model-c "*Q5_K_M*"
+    """
+    if len(args) < 3 or "--help" in args or "-h" in args:
+        print(cmd_download.__doc__)
+        return
+
+    repo, name, pattern = args[0], args[1], args[2]
+    dest = f"{cfg['models_dir']}/{name}"
+    print(f"Downloading {bold(repo)}")
+    print(f"  Destination: {cyan(dest)}")
+    print(f"  Pattern:     {pattern}\n")
+    subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
+                    f"python3 {cfg['hf_dl']} {repo} {dest} '{pattern}'"])
+
+
+def cmd_queue(args, cfg):
+    """Queue multiple model downloads to run sequentially in the background.
+
+    Usage: spark queue <repo> <name> <pattern> [<repo> <name> <pattern> ...]
+
+    Arguments taken in groups of 3 — repo, local name, glob pattern.
+    Each download starts only after the previous one completes.
+    Runs in a background screen session so it survives SSH disconnects.
+
+    Examples:
+      spark queue \\
+        unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*" \\
+        unsloth/model-c-GGUF model-c "*Q5_K_M*"
+
+      spark queue \\
+        unsloth/model-b-GGUF model-b "*UD-Q3_K_XL*" \\
+        unsloth/NVIDIA-model-d-120B-A12B-GGUF model-d "*UD-Q4_K_M*"
+
+    Monitor: spark download-status
+    """
+    if not args or "--help" in args or "-h" in args:
+        print(cmd_queue.__doc__)
+        return
+
+    if len(args) % 3 != 0:
+        print(red(f"Arguments must be groups of 3 (repo name pattern). Got {len(args)}."))
+        print(f"  Run {cyan('spark queue --help')} for usage.")
+        sys.exit(1)
+
+    triplets = [(args[i], args[i+1], args[i+2]) for i in range(0, len(args), 3)]
+
+    print(bold(f"Queuing {len(triplets)} download(s) sequentially:\n"))
+    for i, (repo, name, pattern) in enumerate(triplets, 1):
+        dest = f"{cfg['models_dir']}/{name}"
+        print(f"  {bold(str(i))}  {cyan(repo)}")
+        print(f"     → {dest}  {dim(pattern)}")
+    print()
+
+    dl_script = cfg['hf_dl']
+    log = "~/models/download.log"
+    chain = " && ".join(
+        f"echo '[{i+1}/{len(triplets)}] {name}' | tee -a {log} && "
+        f"python3 {dl_script} {repo} {cfg['models_dir']}/{name} '{pattern}' 2>&1 | tee -a {log}"
+        for i, (repo, name, pattern) in enumerate(triplets)
+    )
+    full_cmd = f"echo '' > {log} && {chain} && echo 'ALL DONE' | tee -a {log}"
+
+    ssh_screen(cfg, "downloads", full_cmd)
+    print(ok(f"Downloads queued in background screen session 'downloads'"))
+    print(f"  Monitor:  {cyan('du -sh ~/models/*/')}")
+    print(f"  Log:      {cyan('spark logs-dl')}")
+    print(f"  Attach:   {dim('ssh into DGX, then: screen -r downloads')}")
+
+
+def cmd_logs_dl(args, cfg):
+    """Tail the download queue log. Ctrl+C to exit.
+
+    Usage: spark logs-dl
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_logs_dl.__doc__)
+        return
+
+    print(dim(f"Tailing download log on {cfg['dgx_host']} — Ctrl+C to stop\n"))
+    subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
+                    "tail -f ~/models/download.log"])
+
+
+def cmd_open(args, cfg):
+    """Open the built-in llama-server chat UI in the default browser.
+
+    Usage: spark open
+
+    Only works when llama-server is running — vLLM has no built-in UI.
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_open.__doc__)
+        return
+
+    import webbrowser
+    url = f"http://{cfg['dgx_host']}:{cfg['port']}"
+    print(f"Opening {cyan(url)}")
+    webbrowser.open(url)
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _flag_str(args: list, name: str, default):
+    try:
+        i = args.index(name)
+        return args[i + 1]
+    except (ValueError, IndexError):
+        return default
+
+
+def _flag(args: list, name: str, default):
+    try:
+        i = args.index(name)
+        return type(default)(args[i + 1])
+    except (ValueError, IndexError):
+        return default
+
+COMMANDS = {
+    "init":     cmd_init,
+    "status":   cmd_status,
+    "models":   cmd_models,
+    "serve":    cmd_serve,
+    "stop":     cmd_stop,
+    "logs":     cmd_logs,
+    "logs-dl":  cmd_logs_dl,
+    "download": cmd_download,
+    "queue":    cmd_queue,
+    "open":     cmd_open,
+}
+
+# ── Help ──────────────────────────────────────────────────────────────────────
+
+def print_help(cfg):
+    print(__doc__)
+    print(bold("Commands:"))
+    col = max(len(k) for k in COMMANDS) + 2
+    for name, fn in COMMANDS.items():
+        first_line = (fn.__doc__ or "").strip().splitlines()[0]
+        print(f"  {cyan(name):<{col+9}} {first_line}")
+    print()
+    cfg_status = str(CONFIG_PATH) if CONFIG_PATH.exists() else warn(f"{CONFIG_PATH} (not found — run: spark init)")
+    print(f"  Config: {cfg_status}")
+    print(f"  Host:   {cyan(cfg['dgx_host'])}")
+
+
+def main():
+    args = sys.argv[1:]
+    cfg  = load_config()
+
+    # --help anywhere with no subcommand → top-level help
+    if not args or args == ["--help"] or args == ["-h"]:
+        print_help(cfg)
+        return
+
+    cmd  = args[0]
+    rest = args[1:]
+
+    if cmd not in COMMANDS:
+        print(red(f"Unknown command: {cmd}"))
+        print(f"Run {cyan('spark --help')} for available commands.")
+        sys.exit(1)
+
+    COMMANDS[cmd](rest, cfg)
+
+
+if __name__ == "__main__":
+    main()
