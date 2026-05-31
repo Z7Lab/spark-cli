@@ -174,8 +174,8 @@ def cmd_status(args, cfg):
     print(f"  SSH      {ok('connected')}")
 
     # Detect server type
-    llama_pid = ssh(cfg, "pgrep -f llama-server | head -1 || true")
-    vllm_pid  = ssh(cfg, "pgrep -f 'vllm.entrypoints' | head -1 || true")
+    llama_pid = ssh(cfg, "pgrep llama-server | head -1 || true")
+    vllm_pid  = ssh(cfg, "pgrep -f '[v]llm.entrypoints' | head -1 || true")
 
     if llama_pid:
         print(f"  Server   {ok('llama-server')}  (pid {llama_pid})")
@@ -216,7 +216,7 @@ def cmd_status(args, cfg):
             print(f"  ComfyUI  {dim('not running')}  Run: {cyan('spark comfy start')}")
 
     # Whisper server
-    w_pid = ssh(cfg, "pgrep -f whisper-server | head -1 || true")
+    w_pid = ssh(cfg, "pgrep whisper-server | head -1 || true")
     if w_pid:
         w_model = ""
         w_line  = ssh(cfg, f"ps -p {w_pid} -o args= 2>/dev/null || true")
@@ -388,10 +388,10 @@ def cmd_serve(args, cfg):
     quant = _parse_quant(Path(model_path).name)
     model_dir = Path(model_path).parent.name if _is_quant_dir(Path(model_path).parent.name) else Path(model_path).name
 
-    existing = ssh(cfg, "pgrep -f llama-server || true")
+    existing = ssh(cfg, "pgrep llama-server || true")
     if existing:
         print(yellow(f"⚠ Stopping existing server (pid {existing.split()[0]})..."))
-        ssh(cfg, "pkill -f llama-server || true; screen -S llama -X quit 2>/dev/null || true")
+        ssh(cfg, "pkill llama-server || true; screen -S llama -X quit 2>/dev/null || true")
         import time; time.sleep(2)
 
     print(f"Loading {bold(name)}  {cyan(quant)}  on port {port}...")
@@ -434,11 +434,11 @@ def cmd_stop(args, cfg):
         print(cmd_stop.__doc__)
         return
 
-    pids = ssh(cfg, "pgrep -f 'llama-server|vllm' || true")
+    pids = ssh(cfg, "pgrep -f '[l]lama-server|[v]llm' || true")
     if not pids:
         print(dim("Server is not running."))
         return
-    ssh(cfg, "pkill -f 'llama-server|vllm' || true; screen -S llama -X quit 2>/dev/null || true")
+    ssh(cfg, "pkill -f '[l]lama-server|[v]llm' || true; screen -S llama -X quit 2>/dev/null || true")
     print(ok("Server stopped. GPU memory freed."))
 
 
@@ -721,10 +721,10 @@ def cmd_transcribe(args, cfg):
             print(f"  {cyan(f'cd ~/whisper.cpp && ./models/download-ggml-model.sh {model}')}")
             sys.exit(1)
 
-        existing = ssh(cfg, "pgrep -f whisper-server || true")
+        existing = ssh(cfg, "pgrep whisper-server || true")
         if existing:
             print(yellow(f"⚠ Stopping existing whisper-server (pid {existing.split()[0]})..."))
-            ssh(cfg, "pkill -f whisper-server || true")
+            ssh(cfg, "pkill whisper-server || true")
             import time; time.sleep(1)
 
         print(f"Starting whisper-server  {cyan(model)}  on port {port}...")
@@ -745,16 +745,16 @@ def cmd_transcribe(args, cfg):
         print(f"\n  {warn('Still starting')} — run: {cyan('spark transcribe logs')}")
 
     elif sub == "stop":
-        pid = ssh(cfg, "pgrep -f whisper-server || true")
+        pid = ssh(cfg, "pgrep whisper-server || true")
         if not pid:
             print(dim("whisper-server is not running."))
             return
-        ssh(cfg, "pkill -f whisper-server || true")
+        ssh(cfg, "pkill whisper-server || true")
         print(ok("whisper-server stopped."))
 
     elif sub == "status":
         port = _flag(rest, "--port", 8081)
-        pid  = ssh(cfg, "pgrep -f whisper-server | head -1 || true")
+        pid  = ssh(cfg, "pgrep whisper-server | head -1 || true")
         if pid:
             print(f"  Transcription  {ok('whisper-server')}  (pid {pid})")
             model_line = ssh(cfg, f"ps -p {pid} -o args= 2>/dev/null || true")
