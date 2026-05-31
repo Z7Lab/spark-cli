@@ -1,0 +1,6 @@
+# dispatcher sandbox artifacts
+.mcp.json
+.dispatcher/
+.claude/.sandbox-exit-code
+.claude/.sandbox-status.json
+.codex/.sandbox-status.json

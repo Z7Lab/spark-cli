@@ -17,6 +17,8 @@ Usage:
     spark queue <repo> <name> <pattern> [<repo> <name> <pattern> ...]
                                          Queue multiple downloads to run sequentially
     spark logs-dl                        Tail the download queue log
+    spark comfy <start|stop|status|logs>
+                                         Manage AEON-Spark ComfyUI (image/video generation)
     spark transcribe <start|stop|status|logs>
                                          Manage whisper-server for audio transcription
     spark open                           Open the built-in chat UI in browser
@@ -199,6 +201,21 @@ def cmd_status(args, cfg):
             print(f"  API      {warn('still loading...')}")
     else:
         print(f"  Server   {dim('not running')}  Run: {cyan('spark serve <model>')}")
+
+    # ComfyUI
+    comfy_container = ssh(cfg, "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
+    if comfy_container:
+        c_health = ssh(cfg, "curl -sf http://localhost:8188/ -o /dev/null -w '%{http_code}' || echo 0")
+        if c_health.strip() in ("200", "101"):
+            print(f"  ComfyUI  {ok(f'http://{host}:8188')}")
+        else:
+            print(f"  ComfyUI  {warn('starting...')}  {dim(comfy_container)}")
+    else:
+        c_err = ssh(cfg, "docker ps 2>&1 | head -1")
+        if "permission denied" in c_err.lower():
+            print(f"  ComfyUI  {warn('Docker permission denied')}  Run on DGX: {cyan('sudo chmod 666 /var/run/docker.sock')}")
+        else:
+            print(f"  ComfyUI  {dim('not running')}  Run: {cyan('spark comfy start')}")
 
     # Whisper server
     w_pid = ssh(cfg, "pgrep -f whisper-server | head -1 || true")
@@ -529,6 +546,101 @@ def cmd_logs_dl(args, cfg):
                     "tail -f ~/models/download.log"])
 
 
+def cmd_comfy(args, cfg):
+    """Manage the ComfyUI image/video generation server (AEON-Spark).
+
+    Usage: spark comfy <subcommand> [options]
+
+    Subcommands:
+      start             Start AEON-Spark via docker compose (port 8188)
+      stop              Stop the running ComfyUI container
+      status            Show ComfyUI state and UI URL
+      logs [--lines N]  Tail the ComfyUI container logs
+
+    Accesses ComfyUI at:
+      http://<dgx-host>:8188
+
+    AEON-Spark pre-bundles FLUX 2 Dev, LTX-2.3 22B, and correct
+    sm_121 / UMA launch flags for GB10.
+
+    Examples:
+      spark comfy start
+      spark comfy stop
+      spark comfy status
+      spark comfy logs
+    """
+    if not args or "--help" in args or "-h" in args:
+        print(cmd_comfy.__doc__)
+        return
+
+    sub  = args[0]
+    rest = args[1:]
+    compose_dir = "~/comfyui-aeon-spark"
+    port = 8188
+
+    if sub == "start":
+        existing = ssh(cfg, f"docker ps --filter name=comfy --format '{{{{.Names}}}}' 2>/dev/null | head -1")
+        if existing:
+            print(warn(f"ComfyUI container already running: {existing}"))
+            ui_url = f"http://{cfg['dgx_host']}:{port}"
+            print(f"  UI: {cyan(ui_url)}")
+            return
+
+        print(f"Starting AEON-Spark ComfyUI on port {port}...")
+        result = ssh(cfg, f"cd {compose_dir} && docker compose up -d 2>&1")
+        if "error" in result.lower() or "permission denied" in result.lower():
+            print(fail("Docker error:"))
+            print(f"  {result}")
+            print(f"\n  Fix Docker permissions on the DGX:")
+            print(f"  {cyan('sudo chmod 666 /var/run/docker.sock')}")
+            sys.exit(1)
+
+        import time
+        for i in range(30):
+            time.sleep(3)
+            health = ssh(cfg, f"curl -sf http://localhost:{port}/ -o /dev/null -w '%{{http_code}}' || echo 0")
+            if health.strip() in ("200", "101"):
+                print(f"\n  {ok('ComfyUI ready')}")
+                ready_url = f"http://{cfg['dgx_host']}:{port}"
+                print(f"  UI  {cyan(ready_url)}")
+                return
+            print(f"\r  Starting... ({(i+1)*3}s)", end="", flush=True)
+        print(f"\n  {warn('Still starting')} — run: {cyan('spark comfy logs')}")
+
+    elif sub == "stop":
+        result = ssh(cfg, f"cd {compose_dir} && docker compose down 2>&1")
+        if "error" in result.lower() or "permission denied" in result.lower():
+            print(fail(f"Docker error: {result}"))
+            sys.exit(1)
+        print(ok("ComfyUI stopped."))
+
+    elif sub == "status":
+        container = ssh(cfg, "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
+        if container:
+            print(f"  ComfyUI   {ok(container)}")
+            health = ssh(cfg, f"curl -sf http://localhost:{port}/ -o /dev/null -w '%{{http_code}}' || echo 0")
+            if health.strip() in ("200", "101"):
+                comfy_ui = f"http://{cfg['dgx_host']}:{port}"
+                print(f"  UI        {ok(comfy_ui)}")
+            else:
+                print(f"  UI        {warn('loading...')}")
+        else:
+            print(f"  ComfyUI   {dim('not running')}  Run: {cyan('spark comfy start')}")
+            docker_err = ssh(cfg, "docker ps 2>&1 | head -1")
+            if "permission denied" in docker_err.lower():
+                print(f"  {warn('Docker permission denied')}  Run on DGX: {cyan('sudo chmod 666 /var/run/docker.sock')}")
+
+    elif sub == "logs":
+        lines = _flag(rest, "--lines", 50)
+        print(dim(f"Tailing ComfyUI logs — Ctrl+C to stop\n"))
+        subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
+                        f"cd {compose_dir} && docker compose logs --tail={lines} -f"])
+    else:
+        print(red(f"Unknown comfy subcommand: {sub}"))
+        print(f"  Run {cyan('spark comfy --help')} for usage.")
+        sys.exit(1)
+
+
 def cmd_transcribe(args, cfg):
     """Manage the whisper-server for audio transcription.
 
@@ -676,6 +788,7 @@ COMMANDS = {
     "logs-dl":  cmd_logs_dl,
     "download": cmd_download,
     "queue":      cmd_queue,
+    "comfy":      cmd_comfy,
     "transcribe": cmd_transcribe,
     "open":       cmd_open,
 }
