@@ -188,7 +188,7 @@ def cmd_status(args, cfg):
             print(f"  API      {ok(f'http://{host}:{port}/v1')}")
             print(f"  Chat UI  {cyan(f'http://{host}:{port}')}  {dim('(llama-server built-in — open in browser)')}")
         else:
-            print(f"  API      {warn('still loading...')}  Run: {cyan('spark logs')}")
+            print(f"  API      {warn('still loading...')}  Run: {cyan('spark llm logs')}")
     elif vllm_pid:
         print(f"  Server   {ok('vLLM')}  (pid {vllm_pid})")
         health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
@@ -418,17 +418,17 @@ def cmd_serve(args, cfg):
             print(f"  Chat UI  {cyan(chat_url)}  {dim('(open in browser)')}")
             return
         if "error" in log.lower() and "loading" not in log.lower():
-            print(fail(f"\nServer error — run: {cyan('spark logs')}"))
+            print(fail(f"\nServer error — run: {cyan('spark llm logs')}"))
             return
         print(f"\r  Loading... ({(i+1)*2}s)", end="", flush=True)
 
-    print(f"\n  {warn('Still loading')} — run: {cyan('spark logs')} to watch progress")
+    print(f"\n  {warn('Still loading')} — run: {cyan('spark llm logs')} to watch progress")
 
 
 def cmd_stop(args, cfg):
     """Stop (unload) the running model server.
 
-    Usage: spark stop
+    Usage: spark llm stop
     """
     if "--help" in args or "-h" in args:
         print(cmd_stop.__doc__)
@@ -445,7 +445,7 @@ def cmd_stop(args, cfg):
 def cmd_logs(args, cfg):
     """Tail the llama-server log. Ctrl+C to exit.
 
-    Usage: spark logs [--lines N]
+    Usage: spark llm logs [--lines N]
 
     Options:
       --lines N   Show last N lines before following  (default: 20)
