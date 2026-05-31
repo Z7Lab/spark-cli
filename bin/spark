@@ -198,7 +198,7 @@ def cmd_status(args, cfg):
         else:
             print(f"  API      {warn('still loading...')}")
     else:
-        print(f"  Server   {dim('not running')}  Run: {cyan('spark serve <model>')}")
+        print(f"  Server   {dim('not running')}  Run: {cyan('spark llm serve <model>')}")
 
     # ComfyUI
     comfy_container = ssh(cfg, "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
@@ -301,16 +301,16 @@ def cmd_models(args, cfg):
         print(f"  {bold(name)}")
         print(f"    quant   {quant_str}{parts_note}")
         print(f"    size    {size}")
-        print(f"    serve   {dim(f'spark serve {name}')}")
+        print(f"    serve   {dim(f'spark llm serve {name}')}")
         print()
 
-    print(f"  Load a model: {cyan('spark serve <name>')}")
+    print(f"  Load a model: {cyan('spark llm serve <name>')}")
 
 
 def cmd_serve(args, cfg):
     """Start (load) a model on llama-server.
 
-    Usage: spark serve <model> [options]
+    Usage: spark llm serve <model> [options]
 
     Arguments:
       <model>        Matches against downloaded model directory names.
@@ -325,8 +325,8 @@ def cmd_serve(args, cfg):
     Flags always passed: --jinja (chat template tool calling) --tools (built-in tools in UI)
 
     Examples:
-      spark serve model-b                        # prompts if multiple quants
-      spark serve model-b --quant UD-Q3_K_XL    # load specific quant directly
+      spark llm serve model-b                    # prompts if multiple quants
+      spark llm serve model-b --quant UD-Q3_K_XL # load specific quant directly
     """
     if not args or "--help" in args or "-h" in args:
         print(cmd_serve.__doc__)
