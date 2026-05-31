@@ -20,12 +20,14 @@ spark init                                        First-time setup — create ~/
 spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM)
 spark models                                      List downloaded models with quant and size
 
-# LLM serving
+# LLM serving (one llama-server per model — several can run at once)
 spark llm serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
-                                                  Load a model onto llama-server
-spark llm stop                                    Unload the model, free GPU memory
-spark llm logs [--lines N]                        Tail the LLM server log
-spark llm open                                    Open built-in chat UI in browser
+                                                  Load a model (refuses if it won't fit)
+spark llm list                                    Show loaded models, ports, footprints
+spark llm unload <name|--port N>                  Unload one model, free its memory
+spark llm stop                                    Stop ALL LLM servers at once
+spark llm logs [--port N] [--lines N]             Tail a server log
+spark llm open [--port N]                         Open built-in chat UI in browser
 
 # Image / video generation
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
@@ -41,24 +43,51 @@ spark logs-dl                                     Tail the download queue log
 
 ## LLM serving
 
+Each model runs as its own `llama-server` on its own port, so several can be
+loaded at once (memory permitting). Models are addressed by **port** (always
+unambiguous) or by **name**.
+
 ```bash
-# List what's available
+# List what's downloaded
 spark models
 
-# Load by name — prompts if multiple quants
-spark llm serve model-b
+# Load by name — prompts if multiple quants. Picks the next free port (from 30000).
+spark llm serve model-a
 
-# Load specific quant directly (no prompt)
+# Load a specific quant directly (no prompt)
 spark llm serve model-b --quant UD-Q3_K_XL
 
-# Switch models — automatically stops current server first
-spark llm serve model-d
+# Load a second model alongside — gets the next free port (30001, ...)
+spark llm serve model-c
 
-# Unload (frees GPU memory — does not affect whisper or ComfyUI)
+# See what's resident, with ports and footprints
+spark llm list
+#   :30000  model-a UD-Q4_K_XL   16G  pid 115536
+#   :30001  model-c UD-Q5_K_M  25G  pid 123565
+```
+
+Loading never evicts another model behind your back. If a model won't fit in
+free memory, `serve` **refuses** and lists what's resident so you can choose
+what to free — you stay in control of what gets unloaded:
+
+```bash
+spark llm serve model-b --quant UD-Q3_K_XL
+#   ✗ model-b UD-Q3_K_XL needs ~94G, but only 71G is free.
+#     Resident models (unload some to make room):
+#       :30000  model-a ...   spark llm unload --port 30000
+#       :30001  model-c ... spark llm unload --port 30001
+
+# Unload exactly one — by port (exact) or name (refuses if a name is ambiguous)
+spark llm unload --port 30001
+spark llm unload model-a
+
+# Stop everything at once
 spark llm stop
 ```
 
-Chat UI (built-in, no install): `http://gx10-<id>.local:30000`
+`unload` and `stop` free only LLM servers — whisper and ComfyUI are untouched.
+
+Chat UI (built-in, no install): `http://gx10-<id>.local:30000` (or `spark llm open [--port N]`)
 
 ## Image and video generation (ComfyUI)
 

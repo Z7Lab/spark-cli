@@ -9,10 +9,12 @@ Usage:
     spark status                                Show all services (LLM, ComfyUI, Whisper, RAM)
     spark models                                List downloaded models with quant and size
 
-    spark llm serve <model> [--quant Q] ...     Load a model onto llama-server
-    spark llm stop                              Unload the model, free GPU memory
-    spark llm logs [--lines N]                  Tail the LLM server log
-    spark llm open                              Open built-in chat UI in browser
+    spark llm serve <model> [--quant Q] ...     Load a model (one server per model)
+    spark llm list                              Show loaded models, ports, footprints
+    spark llm unload <name|--port N>            Unload one model, free its memory
+    spark llm stop                              Stop ALL LLM servers at once
+    spark llm logs [--port N]                   Tail a server log
+    spark llm open [--port N]                   Open built-in chat UI in browser
 
     spark comfy <start|stop|status|logs>        Manage AEON-Spark ComfyUI (port 8188)
     spark transcribe <start|stop|status|logs>   Manage whisper-server (port 8081)
@@ -173,22 +175,23 @@ def cmd_status(args, cfg):
         return
     print(f"  SSH      {ok('connected')}")
 
-    # Detect server type
-    llama_pid = ssh(cfg, "pgrep llama-server | head -1 || true")
+    # Detect server type — one llama-server per loaded model
+    instances = _llm_instances(cfg)
     vllm_pid  = ssh(cfg, "pgrep -f '[v]llm.entrypoints' | head -1 || true")
 
-    if llama_pid:
-        print(f"  Server   {ok('llama-server')}  (pid {llama_pid})")
-        model_line = ssh(cfg, f"ps -p {llama_pid} -o args= 2>/dev/null || true")
-        if "--model" in model_line:
-            model_path = model_line.split("--model")[1].strip().split()[0]
-            print(f"  Model    {cyan(Path(model_path).name)}")
-        health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
-        if "ok" in health.lower() or "true" in health.lower():
-            print(f"  API      {ok(f'http://{host}:{port}/v1')}")
-            print(f"  Chat UI  {cyan(f'http://{host}:{port}')}  {dim('(llama-server built-in — open in browser)')}")
-        else:
-            print(f"  API      {warn('still loading...')}  Run: {cyan('spark llm logs')}")
+    if instances:
+        for inst in instances:
+            iport  = inst["port"]
+            health = ssh(cfg, f"curl -sf http://localhost:{iport}/health || echo unreachable")
+            ready  = "ok" in health.lower() or "true" in health.lower()
+            label  = f"{cyan(inst['name'])} {dim(inst['quant'])}  :{iport}  {dim('pid ' + inst['pid'])}"
+            if ready:
+                print(f"  Server   {ok('llama-server')}  {label}")
+                print(f"           {ok(f'http://{host}:{iport}/v1')}  "
+                      f"UI {cyan(f'http://{host}:{iport}')}")
+            else:
+                print(f"  Server   {warn('loading...')}  {label}  "
+                      f"Run: {cyan(f'spark llm logs --port {iport}')}")
     elif vllm_pid:
         print(f"  Server   {ok('vLLM')}  (pid {vllm_pid})")
         health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
@@ -264,6 +267,91 @@ def _is_quant_dir(name: str) -> bool:
     return bool(re.match(r'^(UD-)?(IQ|Q)\d', name, re.IGNORECASE)) or name in ('BF16', 'FP8', 'MXFP4_MOE')
 
 
+def _model_name_from_path(model_path: str) -> str:
+    """Derive the model name from a GGUF path, collapsing a quant subdir."""
+    p = Path(model_path)
+    return p.parent.parent.name if _is_quant_dir(p.parent.name) else p.parent.name
+
+
+def _quant_glob(model_path: str, quant: str) -> str:
+    """A remote glob covering every file of one model+quant (handles multi-part).
+
+    Flat layout (quant in filename) → all parts sharing the quant token.
+    Subdir layout (quant is a directory) → the whole quant subdir.
+    """
+    p = Path(model_path)
+    if _is_quant_dir(p.parent.name):
+        return str(p.parent)
+    return f"{p.parent}/*{quant}*"
+
+
+def _llm_instances(cfg: dict) -> list:
+    """Live registry of running llama-server processes — the source of truth.
+
+    Each instance is parsed straight from the process command line, so it can
+    never drift from reality. Returns dicts of {pid, port, model_path, name,
+    quant}, sorted by port.
+    """
+    # Filter on the process name (comm), not the full args — otherwise the
+    # 'screen' wrapper and 'bash -c' shell (whose args also contain the binary
+    # path) would each show up as a phantom instance. comm is exactly
+    # 'llama-server' only for the real binary.
+    raw = ssh(cfg, "ps -eo pid,comm,args | awk '$2==\"llama-server\"' || true")
+    out = []
+    for line in raw.splitlines():
+        parts = line.strip().split(None, 2)
+        if len(parts) < 3 or "--model" not in parts[2]:
+            continue
+        pid, argstr = parts[0], parts[2]
+        model_path = argstr.split("--model", 1)[1].strip().split()[0]
+        port = argstr.split("--port", 1)[1].strip().split()[0] if "--port" in argstr else "?"
+        out.append({
+            "pid":        pid,
+            "port":       port,
+            "model_path": model_path,
+            "name":       _model_name_from_path(model_path),
+            "quant":      _parse_quant(Path(model_path).name),
+        })
+    return sorted(out, key=lambda i: i["port"])
+
+
+def _du_bytes(cfg: dict, target: str) -> int:
+    """Total on-disk size in bytes of a remote path/glob (a model's RAM footprint proxy)."""
+    out = ssh(cfg, f"du -cb {target} 2>/dev/null | tail -1 | cut -f1")
+    try:
+        return int(out)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _free_bytes(cfg: dict) -> int:
+    """Available system memory in bytes (unified memory shared by all models)."""
+    out = ssh(cfg, "free -b | awk '/^Mem:/ {print $7}'")
+    try:
+        return int(out)
+    except (ValueError, TypeError):
+        return 0
+
+
+def _human(n: int) -> str:
+    """Format a byte count as a short human-readable size (e.g. 78G)."""
+    f = float(n)
+    for unit in ("B", "K", "M", "G", "T"):
+        if f < 1024:
+            return f"{f:.0f}{unit}"
+        f /= 1024
+    return f"{f:.0f}P"
+
+
+def _port_log(cfg: dict, port) -> str:
+    """Per-port server log path derived from the configured server_log base."""
+    base = cfg["server_log"]
+    if "." in Path(base).name:
+        stem, ext = base.rsplit(".", 1)
+        return f"{stem}-{port}.{ext}"
+    return f"{base}-{port}"
+
+
 def cmd_models(args, cfg):
     """List downloaded models with quant and size.
 
@@ -308,7 +396,12 @@ def cmd_models(args, cfg):
 
 
 def cmd_serve(args, cfg):
-    """Start (load) a model on llama-server.
+    """Start (load) a model on its own llama-server.
+
+    Each model runs as a separate llama-server on its own port, so several can
+    be loaded at once. If the model will not fit in free memory, serve refuses
+    and lists the resident models rather than evicting any — use 'spark llm
+    unload' to free space yourself.
 
     Usage: spark llm serve <model> [options]
 
@@ -318,7 +411,7 @@ def cmd_serve(args, cfg):
 
     Options:
       --quant Q      Quant to load if multiple available  (e.g. UD-Q3_K_XL)
-      --port N       Port to bind  (default: 30000)
+      --port N       Bind a specific port  (default: next free from 30000)
       --ctx N        Context window size  (default: 8192)
       --parallel N   Parallel request slots  (default: 4)
 
@@ -334,6 +427,7 @@ def cmd_serve(args, cfg):
 
     name  = args[0]
     quant_filter = _flag_str(args, "--quant", None)
+    explicit_port = "--port" in args
     port  = _flag(args, "--port", cfg["port"])
     ctx   = _flag(args, "--ctx",  8192)
     par   = _flag(args, "--parallel", 4)
@@ -386,14 +480,45 @@ def cmd_serve(args, cfg):
         model_path = entry_files[0]
 
     quant = _parse_quant(Path(model_path).name)
-    model_dir = Path(model_path).parent.name if _is_quant_dir(Path(model_path).parent.name) else Path(model_path).name
 
-    existing = ssh(cfg, "pgrep llama-server || true")
-    if existing:
-        print(yellow(f"⚠ Stopping existing server (pid {existing.split()[0]})..."))
-        ssh(cfg, "pkill llama-server || true; screen -S llama -X quit 2>/dev/null || true")
-        import time; time.sleep(2)
+    # Each model runs as its own llama-server on its own port — never evict
+    # another model implicitly. The live processes are the registry.
+    instances = _llm_instances(cfg)
+    for inst in instances:
+        if inst["name"] == name and inst["quant"] == quant:
+            print(warn(f"{name} {quant} is already loaded on port {inst['port']} "
+                       f"(pid {inst['pid']})."))
+            return
 
+    used_ports = {i["port"] for i in instances}
+    if str(port) in used_ports:
+        if explicit_port:
+            holder = next(i for i in instances if i["port"] == str(port))
+            print(fail(f"Port {port} is in use by {holder['name']} {holder['quant']}."))
+            print(f"  Pick another {cyan('--port N')}, or free it: "
+                  f"{cyan(f'spark llm unload --port {port}')}")
+            sys.exit(1)
+        port = cfg["port"]
+        while str(port) in used_ports:
+            port += 1
+
+    # Deterministic fit check — refuse rather than silently evict.
+    needed = _du_bytes(cfg, _quant_glob(model_path, quant))
+    avail  = _free_bytes(cfg)
+    if needed and avail and needed > avail:
+        print(fail(f"{name} {quant} needs ~{_human(needed)}, but only "
+                   f"{_human(avail)} is free."))
+        if instances:
+            print(dim("  Resident models (unload some to make room):"))
+            for inst in instances:
+                sz   = _human(_du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"])))
+                hint = dim(f"spark llm unload --port {inst['port']}")
+                print(f"    :{inst['port']}  {cyan(inst['name'])} {dim(inst['quant'])}  {sz}   {hint}")
+        print(dim("  (estimate is model size on disk; KV cache adds more)"))
+        sys.exit(1)
+
+    session = f"llama-{port}"
+    log_path = _port_log(cfg, port)
     print(f"Loading {bold(name)}  {cyan(quant)}  on port {port}...")
 
     serve_cmd = (
@@ -402,15 +527,15 @@ def cmd_serve(args, cfg):
         f"--port {port} --host 0.0.0.0 "
         f"--ctx-size {ctx} --n-gpu-layers 999 --parallel {par} "
         f"--jinja --tools all "
-        f"2>&1 | tee {cfg['server_log']}"
+        f"2>&1 | tee {log_path}"
     )
-    ssh_screen(cfg, "llama", serve_cmd)
+    ssh_screen(cfg, session, serve_cmd)
 
     print(dim("Waiting for server to be ready..."))
     import time
     for i in range(90):
         time.sleep(2)
-        log = ssh(cfg, f"tail -3 {cfg['server_log']} 2>/dev/null || true")
+        log = ssh(cfg, f"tail -3 {log_path} 2>/dev/null || true")
         if "server is listening" in log:
             print(f"\n  {ok('Model loaded and server ready')}")
             print(f"  API      http://{cfg['dgx_host']}:{port}/v1")
@@ -425,10 +550,97 @@ def cmd_serve(args, cfg):
     print(f"\n  {warn('Still loading')} — run: {cyan('spark llm logs')} to watch progress")
 
 
+def cmd_list(args, cfg):
+    """List loaded LLM models — one llama-server instance per line.
+
+    Usage: spark llm list
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_list.__doc__)
+        return
+
+    instances = _llm_instances(cfg)
+    if not instances:
+        print(dim("No models loaded.")
+              + f"  Load one: {cyan('spark llm serve <model>')}")
+        return
+
+    print(bold("Loaded models"))
+    total = 0
+    for inst in instances:
+        nbytes = _du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"]))
+        total += nbytes
+        print(f"  :{inst['port']}  {bold(inst['name'])} {cyan(inst['quant'])}"
+              f"  {dim(_human(nbytes))}  {dim('pid ' + inst['pid'])}")
+    avail = _free_bytes(cfg)
+    print(dim(f"\n  {len(instances)} loaded — ~{_human(total)} resident, {_human(avail)} free"))
+    print(dim(f"  Unload one: {cyan('spark llm unload <name|--port N>')}"))
+
+
+def cmd_unload(args, cfg):
+    """Unload one loaded model, freeing its memory. Leaves others running.
+
+    Usage: spark llm unload <name> [--quant Q]
+           spark llm unload --port N
+
+    A model is addressed by its port (always unambiguous) or by name. If a
+    name matches more than one loaded instance (e.g. two quants), it refuses
+    and lists the candidates so you can disambiguate with --port or --quant.
+    """
+    if "--help" in args or "-h" in args:
+        print(cmd_unload.__doc__)
+        return
+
+    instances = _llm_instances(cfg)
+    if not instances:
+        print(dim("No models loaded."))
+        return
+
+    port  = _flag_str(args, "--port", None)
+    quant = _flag_str(args, "--quant", None)
+    name  = next((a for a in args if not a.startswith("-")
+                  and a != port and a != quant), None)
+
+    if port:
+        matches = [i for i in instances if i["port"] == str(port)]
+        if not matches:
+            print(fail(f"No model loaded on port {port}."))
+            sys.exit(1)
+    elif name:
+        matches = [i for i in instances if i["name"].lower() == name.lower()]
+        if quant:
+            matches = [i for i in matches if i["quant"].lower() == quant.lower()]
+        if not matches:
+            print(fail(f"No loaded model matches '{name}'"
+                       + (f" {quant}" if quant else "") + "."))
+            print(f"  Run {cyan('spark llm list')} to see what's loaded.")
+            sys.exit(1)
+    else:
+        print(fail("Specify a model name or --port N to unload."))
+        print(f"  Run {cyan('spark llm list')} to see what's loaded.")
+        sys.exit(1)
+
+    if len(matches) > 1:
+        print(fail(f"'{name}' is ambiguous — {len(matches)} instances loaded:"))
+        for i in matches:
+            print(f"    --port {i['port']}  {cyan(i['name'])} {dim(i['quant'])}")
+        print(dim("  Re-run with --port N or --quant Q."))
+        sys.exit(1)
+
+    inst = matches[0]
+    ssh(cfg, f"kill {inst['pid']} 2>/dev/null || true; "
+             f"screen -S llama-{inst['port']} -X quit 2>/dev/null || true")
+    print(ok(f"Unloaded {inst['name']} {inst['quant']} (was on port {inst['port']}). "
+             f"Memory freed."))
+
+
 def cmd_stop(args, cfg):
-    """Stop (unload) the running model server.
+    """Stop ALL llama-server / vLLM instances at once and free their memory.
 
     Usage: spark llm stop
+
+    To unload a single model and leave the rest running, use
+    'spark llm unload <name|--port N>'.
     """
     if "--help" in args or "-h" in args:
         print(cmd_stop.__doc__)
@@ -436,18 +648,25 @@ def cmd_stop(args, cfg):
 
     pids = ssh(cfg, "pgrep -f '[l]lama-server|[v]llm' || true")
     if not pids:
-        print(dim("Server is not running."))
+        print(dim("No LLM server is running."))
         return
-    ssh(cfg, "pkill -f '[l]lama-server|[v]llm' || true; screen -S llama -X quit 2>/dev/null || true")
-    print(ok("Server stopped. GPU memory freed."))
+    ssh(cfg, "pkill -f '[l]lama-server|[v]llm' || true; "
+             "for s in $(screen -ls 2>/dev/null | grep -oE '[0-9]+\\.llama[-0-9]*'); "
+             "do screen -S \"$s\" -X quit 2>/dev/null; done")
+    n = len(pids.split())
+    print(ok(f"Stopped {n} LLM server(s). Memory freed."))
 
 
 def cmd_logs(args, cfg):
-    """Tail the llama-server log. Ctrl+C to exit.
+    """Tail a llama-server log. Ctrl+C to exit.
 
-    Usage: spark llm logs [--lines N]
+    Usage: spark llm logs [--port N] [--lines N]
+
+    With multiple models loaded, pass --port to pick which one. With a single
+    model loaded, it is selected automatically.
 
     Options:
+      --port N    Which server's log to tail (default: the only one loaded)
       --lines N   Show last N lines before following  (default: 20)
     """
     if "--help" in args or "-h" in args:
@@ -455,9 +674,25 @@ def cmd_logs(args, cfg):
         return
 
     lines = _flag(args, "--lines", 20)
-    print(dim(f"Tailing server log on {cfg['dgx_host']} — Ctrl+C to stop\n"))
+    port  = _flag_str(args, "--port", None)
+
+    if port is None:
+        instances = _llm_instances(cfg)
+        if len(instances) == 1:
+            port = instances[0]["port"]
+        elif not instances:
+            print(dim("No models loaded — nothing to tail."))
+            return
+        else:
+            print(fail("Multiple models loaded — specify --port:"))
+            for i in instances:
+                print(f"    --port {i['port']}  {cyan(i['name'])} {dim(i['quant'])}")
+            return
+
+    log_path = _port_log(cfg, port)
+    print(dim(f"Tailing {log_path} on {cfg['dgx_host']} — Ctrl+C to stop\n"))
     subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
-                    f"tail -n {lines} -f {cfg['server_log']}"])
+                    f"tail -n {lines} -f {log_path}"])
 
 
 def cmd_download(args, cfg):
@@ -782,29 +1017,36 @@ def cmd_transcribe(args, cfg):
 
 
 def cmd_llm(args, cfg):
-    """Manage the LLM inference server (llama-server).
+    """Manage the LLM inference server(s) (llama-server).
+
+    Each model runs as its own llama-server on its own port, so several can be
+    loaded at once (memory permitting). Models are addressed by port or name.
 
     Usage: spark llm <subcommand> [options]
 
     Subcommands:
       serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
-                        Load a model onto llama-server
-      stop              Unload the running model and free GPU memory
-      logs [--lines N]  Tail the llama-server log
-      open              Open the built-in chat UI in browser
+                              Load a model — refuses if it won't fit in RAM
+      list                    Show loaded models, their ports and footprints
+      unload <name|--port N>  Unload one model, leaving the rest running
+      stop                    Stop ALL llama-server instances at once
+      logs [--port N]         Tail a server log
+      open [--port N]         Open a model's built-in chat UI in browser
 
     Examples:
-      spark llm serve model-b
       spark llm serve model-b --quant UD-Q3_K_XL
+      spark llm list
+      spark llm unload --port 30001
+      spark llm unload model-c
       spark llm stop
-      spark llm logs
-      spark llm open
     """
     _LLM_HELP = {
-        "serve": "serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]\n\n  Load a model onto llama-server. Run 'spark models' to see available names.\n\n  Options:\n    --quant Q      Quant to load if multiple available (e.g. UD-Q3_K_XL)\n    --port N       Port to bind (default: 30000)\n    --ctx N        Context window size (default: 8192)\n    --parallel N   Parallel request slots (default: 4)\n\n  Always passes: --jinja --tools all",
-        "stop":  "stop\n\n  Unload the running model and free GPU memory.\n  Does not affect whisper-server or ComfyUI.",
-        "logs":  "logs [--lines N]\n\n  Options:\n    --lines N   Lines to show before following (default: 20)",
-        "open":  "open\n\n  Open the built-in llama-server SvelteKit chat UI in your browser.",
+        "serve":  "serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]\n\n  Load a model onto a new llama-server. Run 'spark models' to see names.\n  Picks the next free port automatically; refuses (rather than evicting\n  other models) if the model will not fit in free memory.\n\n  Options:\n    --quant Q      Quant to load if multiple available (e.g. UD-Q3_K_XL)\n    --port N       Bind a specific port (default: next free from 30000)\n    --ctx N        Context window size (default: 8192)\n    --parallel N   Parallel request slots (default: 4)\n\n  Always passes: --jinja --tools all",
+        "list":   "list\n\n  Show every loaded model: port, name, quant, footprint and pid.",
+        "unload": "unload <name> [--quant Q]\n  unload --port N\n\n  Unload a single model and free its memory; other models keep running.\n  Address it by --port (always unambiguous) or by name. An ambiguous name\n  (two quants loaded) is refused with the candidate ports listed.",
+        "stop":   "stop\n\n  Stop ALL llama-server / vLLM instances at once and free their memory.\n  Use 'unload' to stop just one. Does not affect whisper or ComfyUI.",
+        "logs":   "logs [--port N] [--lines N]\n\n  Options:\n    --port N    Which server's log to tail (default: the only one loaded)\n    --lines N   Lines to show before following (default: 20)",
+        "open":   "open [--port N]\n\n  Open a model's built-in llama-server chat UI in your browser.\n  With several loaded, pass --port to choose one.",
     }
 
     if not args or args[0] in ("-h", "--help"):
@@ -823,13 +1065,29 @@ def cmd_llm(args, cfg):
 
     if sub == "serve":
         cmd_serve(rest, cfg)
+    elif sub == "list":
+        cmd_list(rest, cfg)
+    elif sub == "unload":
+        cmd_unload(rest, cfg)
     elif sub == "stop":
         cmd_stop(rest, cfg)
     elif sub == "logs":
         cmd_logs(rest, cfg)
     elif sub == "open":
         import webbrowser
-        url = f"http://{cfg['dgx_host']}:{cfg['port']}"
+        port = _flag_str(rest, "--port", None)
+        if port is None:
+            instances = _llm_instances(cfg)
+            if len(instances) == 1:
+                port = instances[0]["port"]
+            elif not instances:
+                print(dim("No models loaded.")); return
+            else:
+                print(fail("Multiple models loaded — specify --port:"))
+                for i in instances:
+                    print(f"    --port {i['port']}  {cyan(i['name'])} {dim(i['quant'])}")
+                return
+        url = f"http://{cfg['dgx_host']}:{port}"
         print(f"Opening {cyan(url)}")
         webbrowser.open(url)
     else:
