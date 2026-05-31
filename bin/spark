@@ -232,6 +232,17 @@ def cmd_status(args, cfg):
     else:
         print(f"  Whisper  {dim('not running')}  Run: {cyan('spark transcribe start')}")
 
+    # Memory
+    mem = ssh(cfg, "free -h | awk '/^Mem:/ {print $3\" used / \"$2\" total — \"$7\" available\"}'")
+    if mem:
+        avail_gb = ssh(cfg, "free -g | awk '/^Mem:/ {print $7}'")
+        try:
+            avail = int(avail_gb.strip())
+            color = green if avail >= 30 else yellow if avail >= 10 else red
+            print(f"  RAM      {color(mem)}")
+        except Exception:
+            print(f"  RAM      {mem}")
+
     # Disk
     disk = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $4\" free of \"$2}}'")
     if disk:
@@ -569,12 +580,26 @@ def cmd_comfy(args, cfg):
       spark comfy status
       spark comfy logs
     """
-    if not args or "--help" in args or "-h" in args:
+    _COMFY_HELP = {
+        "start":  "start             Start AEON-Spark via docker compose (port 8188)\n  No additional flags.",
+        "stop":   "stop              Stop the running ComfyUI container\n  No additional flags.",
+        "status": "status            Show ComfyUI state and UI URL\n  No additional flags.",
+        "logs":   "logs [--lines N]  Tail the ComfyUI container logs\n\n  Options:\n    --lines N   Lines to show before following (default: 50)",
+    }
+    if not args or args[0] in ("-h", "--help"):
         print(cmd_comfy.__doc__)
         return
 
     sub  = args[0]
     rest = args[1:]
+
+    if "--help" in rest or "-h" in rest:
+        if sub in _COMFY_HELP:
+            print(f"spark comfy {_COMFY_HELP[sub]}")
+        else:
+            print(cmd_comfy.__doc__)
+        return
+
     compose_dir = "~/comfyui-aeon-spark"
     port = 8188
 
@@ -663,12 +688,25 @@ def cmd_transcribe(args, cfg):
       spark transcribe stop
       spark transcribe status
     """
-    if not args or "--help" in args or "-h" in args:
+    _TRANSCRIBE_HELP = {
+        "start":  "start [--model M] [--port N]\n\n  Options:\n    --model M   Whisper model name (default: large-v3). Available: large-v3, medium, small, tiny\n    --port N    Port to bind (default: 8081)",
+        "stop":   "stop              Stop the running whisper-server\n  No additional flags.",
+        "status": "status            Show whisper-server state and endpoint URL\n  No additional flags.",
+        "logs":   "logs [--lines N]  Tail the whisper-server log\n\n  Options:\n    --lines N   Lines to show before following (default: 20)",
+    }
+    if not args or args[0] in ("-h", "--help"):
         print(cmd_transcribe.__doc__)
         return
 
     sub = args[0]
     rest = args[1:]
+
+    if "--help" in rest or "-h" in rest:
+        if sub in _TRANSCRIBE_HELP:
+            print(f"spark transcribe {_TRANSCRIBE_HELP[sub]}")
+        else:
+            print(cmd_transcribe.__doc__)
+        return
 
     whisper_bin = "~/whisper.cpp/build/bin/whisper-server"
     whisper_log = "~/whisper-server.log"
