@@ -102,7 +102,16 @@ spark comfy logs
 
 UI at: `http://gx10-<id>.local:8188`
 
-> Docker requires `sudo chmod 666 /var/run/docker.sock` on the DGX if permission denied.
+> **Docker permission denied?** Add your user to the `docker` group once (durable):
+> `sudo usermod -aG docker user` then log out/in. `sudo chmod 666 /var/run/docker.sock`
+> works too but is ephemeral — it reverts on any daemon/socket restart (e.g. an
+> engine upgrade). See [Troubleshooting](#troubleshooting) for daemon-down and other failures.
+
+> **⚠ Running a third-party GPU image.** The ComfyUI stack is a community image
+> (and ComfyUI custom nodes run arbitrary code). For a hardened deployment — a
+> dedicated `svc-spark` account, rootless Docker + CDI so a container escape isn't
+> host root, image digest-pinning, and the `/opt/spark` layout — see
+> [docs/secure-deployment.md](docs/secure-deployment.md).
 
 ## Audio transcription (Whisper)
 
@@ -140,6 +149,25 @@ spark queue \
 spark logs-dl
 ```
 
+## Troubleshooting
+
+The spark CLI prints the exact remedy at the point of failure; this table is the
+same set, kept in one scannable place. Commands run **on the DGX** unless noted
+(`spark` itself runs on your workstation and reaches the DGX over SSH).
+
+| Problem | Likely cause | Fix (exact command) |
+|---------|--------------|---------------------|
+| `permission denied` on `/var/run/docker.sock` (comfy/status) | Your user is not in the `docker` group | **Durable:** `sudo usermod -aG docker user` then log out/in. **Stopgap (ephemeral, reverts on restart):** `sudo chmod 666 /var/run/docker.sock` |
+| `Cannot connect to the Docker daemon` / `spark status` shows "Docker daemon down" | Daemon not running — often a failed `docker-ce` upgrade leaving buildkit `invalid database` | `sudo rm -rf /var/lib/docker/buildkit && sudo systemctl daemon-reload && sudo systemctl restart docker` (check first: `sudo systemctl status docker`) |
+| `spark comfy start` says "Still starting", UI never loads | Container up but ComfyUI still initialising, or a model/runtime error | `spark comfy logs` — watch for the real error. Confirm the daemon is healthy with `spark comfy status` |
+| `spark llm serve` refuses: "needs ~XG, but only YG is free" | Model won't fit in unified memory alongside what's already loaded | `spark llm list` to see residents, then `spark llm unload --port N` (or `spark llm stop`) to free room |
+| `spark llm serve` refuses: "Port N is in use" | Another model already bound that port | Pick a free one with `--port N`, or `spark llm unload --port N` first |
+| Model OOMs / errors mid-load (in `spark llm logs`) | Quant or context window too large for free memory | Free memory (`spark llm list` → `unload`), or load a smaller quant, or lower `--ctx` (default 8192) |
+| Whisper client gets **404** on `/v1/audio/transcriptions` | whisper.cpp has no native OpenAI route | Fixed in current `spark transcribe start` (launches with `--inference-path /v1/audio/transcriptions`). Only that path exists — there is no `/v1/models`. Restart: `spark transcribe stop && spark transcribe start` |
+| `spark status` → `SSH unreachable`; `gx10-*.local` won't resolve | mDNS/avahi not resolving the `.local` host, or wrong host/key | Test `ssh user@gx10-<id>.local`. Ensure `avahi-daemon` is running on the DGX, or set `dgx_host` to its IP in `~/.config/spark.json` |
+| `no config file — using defaults` | `~/.config/spark.json` not created yet | `spark init` |
+| Download queue stalls or errors | HuggingFace rate-limits parallel downloads; `spark queue` runs them sequentially for this reason | `spark logs-dl` to see the failure. Re-running is resume-safe; avoid launching parallel downloads |
+
 ## Config
 
 Config file: `~/.config/spark.json` (create with `spark init`)
@@ -150,7 +178,18 @@ Config file: `~/.config/spark.json` (create with `spark init`)
 | `dgx_user` | `user` | `DGX_USER` |
 | `models_dir` | `~/models` | `SPARK_MODELS_DIR` |
 | `server_bin` | `~/llama.cpp/build/bin/llama-server` | `SPARK_SERVER_BIN` |
+| `server_log` | `~/llama-server.log` | `SPARK_SERVER_LOG` |
 | `port` | `30000` | `SPARK_PORT` |
+| `comfy_dir` | `~/comfyui-aeon-spark` | `SPARK_COMFY_DIR` |
+| `whisper_bin` | `~/whisper.cpp/build/bin/whisper-server` | `SPARK_WHISPER_BIN` |
+| `whisper_log` | `~/whisper-server.log` | `SPARK_WHISPER_LOG` |
+| `whisper_models_dir` | `~/whisper.cpp/models` | `SPARK_WHISPER_MODELS_DIR` |
+| `download_log` | `~/models/download.log` | `SPARK_DOWNLOAD_LOG` |
+
+Every service path is configurable, so the whole stack can be relocated (e.g.
+consolidated under a single service-account-owned `/opt/spark` tree) by editing
+`~/.config/spark.json` — no code changes. Set the keys to the new locations,
+e.g. `"comfy_dir": "/opt/spark/comfyui"`, `"models_dir": "/opt/spark/models"`.
 
 ## Models on this GB10
 

@@ -41,32 +41,55 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config" / "spark.json"
 
 _DEFAULTS = {
-    "dgx_host":    "gx10-<id>.local",
-    "dgx_user":    "user",
-    "models_dir":  "~/models",
-    "server_bin":  "~/llama.cpp/build/bin/llama-server",
-    "server_log":  "~/llama-server.log",
-    "venv":        "~/llama-cpp-venv",
-    "hf_dl":       "~/hf_download.py",
-    "port":        30000,
+    "dgx_host":           "gx10-<id>.local",
+    "dgx_user":           "your-user",  # placeholder
+    "models_dir":         "~/models",
+    "server_bin":         "~/llama.cpp/build/bin/llama-server",
+    "server_log":         "~/llama-server.log",
+    "venv":               "~/llama-cpp-venv",
+    "hf_dl":              "~/hf_download.py",
+    "port":               30000,
+    # Service asset paths — configurable so the whole stack can be relocated
+    # (e.g. consolidated under a single svc-spark-owned /opt/spark tree) without
+    # touching CLI code. Override per key via the env vars below or spark.json.
+    "comfy_dir":          "~/comfyui-aeon-spark",
+    "whisper_bin":        "~/whisper.cpp/build/bin/whisper-server",
+    "whisper_log":        "~/whisper-server.log",
+    "whisper_models_dir": "~/whisper.cpp/models",
+    "download_log":       "~/models/download.log",
+    # When the container stack runs under rootless Docker (as the svc-spark
+    # service account), the daemon listens on the user's XDG runtime socket, not
+    # the system socket — set true so docker commands over SSH target it.
+    "docker_rootless":    False,
 }
 
 def load_config() -> dict:
     cfg = dict(_DEFAULTS)
     # Env var overrides
     env_map = {
-        "DGX_HOST":         "dgx_host",
-        "DGX_USER":         "dgx_user",
-        "SPARK_MODELS_DIR": "models_dir",
-        "SPARK_SERVER_BIN": "server_bin",
-        "SPARK_SERVER_LOG": "server_log",
-        "SPARK_VENV":       "venv",
-        "SPARK_HF_DL":      "hf_dl",
-        "SPARK_PORT":       "port",
+        "DGX_HOST":                 "dgx_host",
+        "DGX_USER":                 "dgx_user",
+        "SPARK_MODELS_DIR":         "models_dir",
+        "SPARK_SERVER_BIN":         "server_bin",
+        "SPARK_SERVER_LOG":         "server_log",
+        "SPARK_VENV":               "venv",
+        "SPARK_HF_DL":              "hf_dl",
+        "SPARK_PORT":               "port",
+        "SPARK_COMFY_DIR":          "comfy_dir",
+        "SPARK_WHISPER_BIN":        "whisper_bin",
+        "SPARK_WHISPER_LOG":        "whisper_log",
+        "SPARK_WHISPER_MODELS_DIR": "whisper_models_dir",
+        "SPARK_DOWNLOAD_LOG":       "download_log",
+        "SPARK_DOCKER_ROOTLESS":    "docker_rootless",
     }
     for env, key in env_map.items():
         if os.environ.get(env):
-            cfg[key] = int(os.environ[env]) if key == "port" else os.environ[env]
+            if key == "port":
+                cfg[key] = int(os.environ[env])
+            elif key == "docker_rootless":
+                cfg[key] = os.environ[env].strip().lower() in ("1", "true", "yes", "on")
+            else:
+                cfg[key] = os.environ[env]
     # File overrides
     if CONFIG_PATH.exists():
         try:
@@ -105,6 +128,85 @@ def ssh(cfg: dict, cmd: str, capture=True) -> str:
 
 def ssh_screen(cfg: dict, session: str, cmd: str):
     ssh(cfg, f'screen -dmS {session} bash -c {json.dumps(cmd)}', capture=False)
+
+# ── Docker pre-flight ───────────────────────────────────────────────────────────
+
+def _docker_env(cfg: dict) -> str:
+    """Shell prefix that points docker at the rootless socket when configured.
+
+    Rootless dockerd listens on the invoking user's XDG runtime socket
+    (`/run/user/<uid>/docker.sock`), not the system socket, so commands run over
+    SSH must set DOCKER_HOST. Empty string for a normal (rootful) daemon.
+    """
+    if cfg.get("docker_rootless"):
+        return "export DOCKER_HOST=unix:///run/user/$(id -u)/docker.sock; "
+    return ""
+
+
+def docker_probe(cfg: dict) -> tuple[str, str]:
+    """Probe the remote Docker daemon and classify its state.
+
+    Returns (state, raw) where state is one of:
+      'ok'          — daemon reachable, commands will work
+      'permission'  — socket exists but this user can't access it (not in docker group)
+      'down'        — daemon installed but not running / unreachable
+      'absent'      — docker binary not installed
+
+    Used as a pre-flight so commands fail fast with the real cause + the fix,
+    instead of polling a dead daemon or mislabelling it as 'not running'.
+    """
+    raw = ssh(cfg, _docker_env(cfg) + "docker info --format '{{.ServerVersion}}' 2>&1 || true")
+    low = raw.lower()
+    if "permission denied" in low:
+        return "permission", raw
+    if "command not found" in low or "no such file" in low:
+        return "absent", raw
+    if ("cannot connect to the docker daemon" in low
+            or "is the docker daemon running" in low):
+        return "down", raw
+    # A clean `docker info` prints just the server version, no error text.
+    if raw and "error" not in low and "cannot" not in low:
+        return "ok", raw
+    # Unknown failure — surface it as 'down' rather than silently mislabel.
+    return "down", raw
+
+
+def docker_remedy_lines(cfg: dict, state: str) -> list[str]:
+    """Operator-ready remedy lines for a bad Docker state (point-of-failure help).
+
+    Mirrors the spark README Troubleshooting table — keep the two in sync.
+    """
+    if state == "permission":
+        usermod = "sudo usermod -aG docker " + cfg["dgx_user"]
+        return [
+            f"  {warn('Docker permission denied')} — your user is not in the docker group.",
+            f"  Durable fix (on DGX, then log out/in):  {cyan(usermod)}",
+            f"  Stopgap (reverts on any daemon restart): "
+            f"{cyan('sudo chmod 666 /var/run/docker.sock')}",
+        ]
+    if state == "down":
+        if cfg.get("docker_rootless"):
+            return [
+                f"  {fail('Rootless Docker daemon is not running.')}",
+                f"  Start it (as {cfg['dgx_user']} on the DGX): "
+                f"{cyan('systemctl --user start docker')}",
+                f"  Check it: {cyan('systemctl --user status docker')}  "
+                f"(needs `loginctl enable-linger {cfg['dgx_user']}`)",
+            ]
+        return [
+            f"  {fail('Docker daemon is not running / unreachable.')}",
+            f"  Check it:   {cyan('sudo systemctl status docker')}",
+            f"  If it failed after an engine upgrade (buildkit 'invalid database'), reset and restart:",
+            f"  {cyan('sudo rm -rf /var/lib/docker/buildkit && sudo systemctl daemon-reload && sudo systemctl restart docker')}",
+        ]
+    if state == "absent":
+        return [f"  {fail('Docker is not installed on the DGX.')}  See: dgx-spark-comfyui-guide.md"]
+    return []
+
+
+def print_docker_remedy(cfg: dict, state: str):
+    for line in docker_remedy_lines(cfg, state):
+        print(line)
 
 # ── Commands ──────────────────────────────────────────────────────────────────
 
@@ -204,7 +306,7 @@ def cmd_status(args, cfg):
         print(f"  Server   {dim('not running')}  Run: {cyan('spark llm serve <model>')}")
 
     # ComfyUI
-    comfy_container = ssh(cfg, "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
+    comfy_container = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
     if comfy_container:
         c_health = ssh(cfg, "curl -sf http://localhost:8188/ -o /dev/null -w '%{http_code}' || echo 0")
         if c_health.strip() in ("200", "101"):
@@ -212,11 +314,19 @@ def cmd_status(args, cfg):
         else:
             print(f"  ComfyUI  {warn('starting...')}  {dim(comfy_container)}")
     else:
-        c_err = ssh(cfg, "docker ps 2>&1 | head -1")
-        if "permission denied" in c_err.lower():
-            print(f"  ComfyUI  {warn('Docker permission denied')}  Run on DGX: {cyan('sudo chmod 666 /var/run/docker.sock')}")
-        else:
+        # No comfy container: tell apart a healthy idle daemon from a daemon
+        # that is down/denied — the latter must not read as 'not running' (bug A2).
+        state, _ = docker_probe(cfg)
+        if state == "ok":
             print(f"  ComfyUI  {dim('not running')}  Run: {cyan('spark comfy start')}")
+        elif state == "permission":
+            print(f"  ComfyUI  {warn('Docker permission denied')}  "
+                  f"Fix: {cyan('sudo usermod -aG docker ' + cfg['dgx_user'])} {dim('(see: spark comfy status)')}")
+        elif state == "absent":
+            print(f"  ComfyUI  {warn('Docker not installed')}")
+        else:
+            print(f"  ComfyUI  {warn('Docker daemon down')}  "
+                  f"Fix: {cyan('sudo systemctl restart docker')} {dim('(see: spark comfy status)')}")
 
     # Whisper server
     w_pid = ssh(cfg, "pgrep whisper-server | head -1 || true")
@@ -761,7 +871,7 @@ def cmd_queue(args, cfg):
     print()
 
     dl_script = cfg['hf_dl']
-    log = "~/models/download.log"
+    log = cfg['download_log']
     chain = " && ".join(
         f"echo '[{i+1}/{len(triplets)}] {name}' | tee -a {log} && "
         f"python3 {dl_script} {repo} {cfg['models_dir']}/{name} '{pattern}' 2>&1 | tee -a {log}"
@@ -787,7 +897,7 @@ def cmd_logs_dl(args, cfg):
 
     print(dim(f"Tailing download log on {cfg['dgx_host']} — Ctrl+C to stop\n"))
     subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
-                    "tail -f ~/models/download.log"])
+                    f"tail -f {cfg['download_log']}"])
 
 
 def cmd_comfy(args, cfg):
@@ -833,11 +943,19 @@ def cmd_comfy(args, cfg):
             print(cmd_comfy.__doc__)
         return
 
-    compose_dir = "~/comfyui-aeon-spark"
+    compose_dir = cfg["comfy_dir"]
     port = 8188
 
     if sub == "start":
-        existing = ssh(cfg, f"docker ps --filter name=comfy --format '{{{{.Names}}}}' 2>/dev/null | head -1")
+        # Pre-flight: a dead/unreachable daemon must fail fast with the real
+        # remedy — never fall through to polling :8188 for 90s (bug A1).
+        state, raw = docker_probe(cfg)
+        if state != "ok":
+            print(fail("Cannot start ComfyUI — Docker is not usable:"))
+            print_docker_remedy(cfg, state)
+            sys.exit(1)
+
+        existing = ssh(cfg, _docker_env(cfg) + f"docker ps --filter name=comfy --format '{{{{.Names}}}}' 2>/dev/null | head -1")
         if existing:
             print(warn(f"ComfyUI container already running: {existing}"))
             ui_url = f"http://{cfg['dgx_host']}:{port}"
@@ -845,12 +963,16 @@ def cmd_comfy(args, cfg):
             return
 
         print(f"Starting AEON-Spark ComfyUI on port {port}...")
-        result = ssh(cfg, f"cd {compose_dir} && docker compose up -d 2>&1")
+        result = ssh(cfg, _docker_env(cfg) + f"cd {compose_dir} && docker compose up -d 2>&1")
         if "error" in result.lower() or "permission denied" in result.lower():
-            print(fail("Docker error:"))
+            # Daemon was up at pre-flight but compose still failed — reclassify
+            # so we print the matching remedy. If the daemon is still fine the
+            # failure is compose/image-level, so show the raw error alone.
+            state2, _ = docker_probe(cfg)
+            print(fail("Docker error starting ComfyUI:"))
             print(f"  {result}")
-            print(f"\n  Fix Docker permissions on the DGX:")
-            print(f"  {cyan('sudo chmod 666 /var/run/docker.sock')}")
+            if state2 != "ok":
+                print_docker_remedy(cfg, state2)
             sys.exit(1)
 
         import time
@@ -866,14 +988,17 @@ def cmd_comfy(args, cfg):
         print(f"\n  {warn('Still starting')} — run: {cyan('spark comfy logs')}")
 
     elif sub == "stop":
-        result = ssh(cfg, f"cd {compose_dir} && docker compose down 2>&1")
+        result = ssh(cfg, _docker_env(cfg) + f"cd {compose_dir} && docker compose down 2>&1")
         if "error" in result.lower() or "permission denied" in result.lower():
+            state, _ = docker_probe(cfg)
             print(fail(f"Docker error: {result}"))
+            if state != "ok":
+                print_docker_remedy(cfg, state)
             sys.exit(1)
         print(ok("ComfyUI stopped."))
 
     elif sub == "status":
-        container = ssh(cfg, "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
+        container = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
         if container:
             print(f"  ComfyUI   {ok(container)}")
             health = ssh(cfg, f"curl -sf http://localhost:{port}/ -o /dev/null -w '%{{http_code}}' || echo 0")
@@ -883,16 +1008,20 @@ def cmd_comfy(args, cfg):
             else:
                 print(f"  UI        {warn('loading...')}")
         else:
-            print(f"  ComfyUI   {dim('not running')}  Run: {cyan('spark comfy start')}")
-            docker_err = ssh(cfg, "docker ps 2>&1 | head -1")
-            if "permission denied" in docker_err.lower():
-                print(f"  {warn('Docker permission denied')}  Run on DGX: {cyan('sudo chmod 666 /var/run/docker.sock')}")
+            # Distinguish "no container, daemon fine" from "daemon down/denied"
+            # — a down or unreachable daemon must not read as 'not running' (bug A2).
+            state, _ = docker_probe(cfg)
+            if state == "ok":
+                print(f"  ComfyUI   {dim('not running')}  Run: {cyan('spark comfy start')}")
+            else:
+                print(f"  ComfyUI   {warn('unavailable — Docker not usable')}")
+                print_docker_remedy(cfg, state)
 
     elif sub == "logs":
         lines = _flag(rest, "--lines", 50)
         print(dim(f"Tailing ComfyUI logs — Ctrl+C to stop\n"))
         subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
-                        f"cd {compose_dir} && docker compose logs --tail={lines} -f"])
+                        _docker_env(cfg) + f"cd {compose_dir} && docker compose logs --tail={lines} -f"])
     else:
         print(red(f"Unknown comfy subcommand: {sub}"))
         print(f"  Run {cyan('spark comfy --help')} for usage.")
@@ -943,9 +1072,9 @@ def cmd_transcribe(args, cfg):
             print(cmd_transcribe.__doc__)
         return
 
-    whisper_bin = "~/whisper.cpp/build/bin/whisper-server"
-    whisper_log = "~/whisper-server.log"
-    models_dir  = "~/whisper.cpp/models"
+    whisper_bin = cfg["whisper_bin"]
+    whisper_log = cfg["whisper_log"]
+    models_dir  = cfg["whisper_models_dir"]
 
     if sub == "start":
         model = _flag_str(rest, "--model", "large-v3")
@@ -955,7 +1084,7 @@ def cmd_transcribe(args, cfg):
         if not model_file:
             print(fail(f"Model ggml-{model}.bin not found in {models_dir}"))
             print(f"  Download it on the DGX with:")
-            print(f"  {cyan(f'cd ~/whisper.cpp && ./models/download-ggml-model.sh {model}')}")
+            print(f"  {cyan(f'{models_dir}/download-ggml-model.sh {model}')}")
             sys.exit(1)
 
         existing = ssh(cfg, "pgrep whisper-server || true")
