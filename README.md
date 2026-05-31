@@ -102,6 +102,18 @@ spark comfy logs
 
 UI at: `http://gx10-<id>.local:8188`
 
+**Generate from the CLI** — `spark comfy generate` submits a FLUX.2 text-to-image
+job to the ComfyUI API and downloads the PNG to your workstation:
+
+```bash
+spark comfy generate "a red fox in a snowy forest at dawn"
+spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
+```
+
+Options: `--width --height --steps --guidance --seed --out --model --encoder --vae`.
+First run loads the models into the GB10's unified memory (a few minutes); after
+that, gens take ~30–60 s.
+
 > **Docker permission denied?** Add your user to the `docker` group once (durable):
 > `sudo usermod -aG docker user` then log out/in. `sudo chmod 666 /var/run/docker.sock`
 > works too but is ephemeral — it reverts on any daemon/socket restart (e.g. an

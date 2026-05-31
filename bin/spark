@@ -17,6 +17,7 @@ Usage:
     spark llm open [--port N]                   Open built-in chat UI in browser
 
     spark comfy <start|stop|status|logs>        Manage AEON-Spark ComfyUI (port 8188)
+    spark comfy generate "<prompt>"             Generate a FLUX.2 image, save the PNG
     spark transcribe <start|stop|status|logs>   Manage whisper-server (port 8081)
 
     spark download <repo> <name> <pattern>      Download a single model from HuggingFace
@@ -900,16 +901,106 @@ def cmd_logs_dl(args, cfg):
                     f"tail -f {cfg['download_log']}"])
 
 
+def _comfy_generate(args, cfg):
+    """Generate a FLUX.2 image via the ComfyUI API and download the PNG locally.
+
+    Talks to ComfyUI's HTTP API at http://<dgx-host>:8188 directly (no SSH):
+    submits a flat FLUX.2 text-to-image graph, polls /history, and fetches the
+    result via /view.
+    """
+    import time, random, urllib.request, urllib.parse, urllib.error
+
+    if not args or args[0].startswith("-"):
+        print(fail('A prompt is required.  Usage: spark comfy generate "<prompt>" [options]'))
+        sys.exit(1)
+    prompt   = args[0]
+    width    = _flag(args, "--width", 1024)
+    height   = _flag(args, "--height", 1024)
+    steps    = _flag(args, "--steps", 20)
+    guidance = float(_flag_str(args, "--guidance", "3.5"))
+    seed     = _flag(args, "--seed", random.randint(1, 2**31 - 1))
+    out      = _flag_str(args, "--out", None)
+    model    = _flag_str(args, "--model",   "flux2_dev_fp8mixed.safetensors")
+    encoder  = _flag_str(args, "--encoder", "mistral_3_small_flux2_bf16.safetensors")
+    vae      = _flag_str(args, "--vae",     "flux2-vae.safetensors")
+
+    base = f"http://{cfg['dgx_host']}:8188"
+    graph = {
+        "1":  {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
+        "2":  {"class_type": "ModelSamplingFlux", "inputs": {"model": ["1", 0], "max_shift": 1.15, "base_shift": 0.5, "width": width, "height": height}},
+        "3":  {"class_type": "CLIPLoader", "inputs": {"clip_name": encoder, "type": "flux2"}},
+        "4":  {"class_type": "VAELoader", "inputs": {"vae_name": vae}},
+        "5":  {"class_type": "CLIPTextEncode", "inputs": {"clip": ["3", 0], "text": prompt}},
+        "6":  {"class_type": "FluxGuidance", "inputs": {"conditioning": ["5", 0], "guidance": guidance}},
+        "7":  {"class_type": "CLIPTextEncode", "inputs": {"clip": ["3", 0], "text": ""}},
+        "8":  {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
+        "9":  {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["8", 0],
+                "seed": seed, "steps": steps, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["4", 0]}},
+        "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "spark_gen"}},
+    }
+
+    def _get(path):
+        return json.load(urllib.request.urlopen(base + path, timeout=60))
+
+    print(f"Generating  {dim(f'{width}x{height}, {steps} steps, guidance {guidance}, seed {seed}')}")
+    print(f"  Prompt: {cyan(prompt)}")
+    try:
+        req = urllib.request.Request(base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
+                                     headers={"Content-Type": "application/json"})
+        pid = json.load(urllib.request.urlopen(req, timeout=60))["prompt_id"]
+    except urllib.error.HTTPError as e:
+        print(fail(f"ComfyUI rejected the request: {e.read().decode()[:600]}")); sys.exit(1)
+    except urllib.error.URLError as e:
+        print(fail(f"Cannot reach ComfyUI at {base} ({e.reason}).  Check: {cyan('spark comfy status')}")); sys.exit(1)
+
+    print(dim("  Submitted — sampling (first run loads models into VRAM, a few min)..."))
+    t0 = time.time()
+    img = None
+    while time.time() - t0 < 1800:
+        time.sleep(4)
+        try:
+            h = _get("/history/" + pid)
+        except Exception:
+            continue
+        if pid in h:
+            st = h[pid].get("status", {})
+            if st.get("status_str") == "error":
+                print("\n" + fail("Generation failed:"))
+                print(f"  {json.dumps(st.get('messages', []))[:800]}"); sys.exit(1)
+            for node_out in h[pid].get("outputs", {}).values():
+                for im in node_out.get("images", []):
+                    img = im
+                    break
+            if img:
+                break
+        print(f"\r  ...{int(time.time() - t0)}s", end="", flush=True)
+    print()
+    if not img:
+        print(fail("Timed out waiting for the image (30 min).")); sys.exit(1)
+
+    q = urllib.parse.urlencode({"filename": img["filename"],
+                                "subfolder": img.get("subfolder", ""),
+                                "type": img.get("type", "output")})
+    data = urllib.request.urlopen(base + "/view?" + q, timeout=120).read()
+    if not out:
+        out = str(Path.cwd() / img["filename"])
+    Path(out).write_bytes(data)
+    print(ok(f"Image saved: {cyan(out)}  {dim(f'({len(data)//1024} KB, {int(time.time() - t0)}s)')}"))
+    print(f"  On DGX: {dim(cfg['comfy_dir'] + '/workspace/output/' + img['filename'])}")
+
+
 def cmd_comfy(args, cfg):
     """Manage the ComfyUI image/video generation server (AEON-Spark).
 
     Usage: spark comfy <subcommand> [options]
 
     Subcommands:
-      start             Start AEON-Spark via docker compose (port 8188)
-      stop              Stop the running ComfyUI container
-      status            Show ComfyUI state and UI URL
-      logs [--lines N]  Tail the ComfyUI container logs
+      start              Start AEON-Spark via docker compose (port 8188)
+      stop               Stop the running ComfyUI container
+      status             Show ComfyUI state and UI URL
+      logs [--lines N]   Tail the ComfyUI container logs
+      generate "<prompt>"  Generate a FLUX.2 image and download the PNG
 
     Accesses ComfyUI at:
       http://<dgx-host>:8188
@@ -919,15 +1010,16 @@ def cmd_comfy(args, cfg):
 
     Examples:
       spark comfy start
-      spark comfy stop
       spark comfy status
-      spark comfy logs
+      spark comfy generate "a red fox in a snowy forest at dawn"
+      spark comfy generate "neon city street" --width 1280 --height 720 --steps 25
     """
     _COMFY_HELP = {
         "start":  "start             Start AEON-Spark via docker compose (port 8188)\n  No additional flags.",
         "stop":   "stop              Stop the running ComfyUI container\n  No additional flags.",
         "status": "status            Show ComfyUI state and UI URL\n  No additional flags.",
         "logs":   "logs [--lines N]  Tail the ComfyUI container logs\n\n  Options:\n    --lines N   Lines to show before following (default: 50)",
+        "generate": "generate \"<prompt>\" [options]\n\n  Generate a FLUX.2 text-to-image render and download the PNG locally.\n\n  Options:\n    --width N      Image width  (default: 1024)\n    --height N     Image height (default: 1024)\n    --steps N      Sampling steps (default: 20)\n    --guidance G   FLUX guidance (default: 3.5)\n    --seed N       Seed (default: random)\n    --out PATH     Local output path (default: ./<filename>.png)\n    --model M      Diffusion model (default: flux2_dev_fp8mixed.safetensors)\n    --encoder E    Text encoder (default: mistral_3_small_flux2_bf16.safetensors)\n    --vae V        VAE (default: flux2-vae.safetensors)",
     }
     if not args or args[0] in ("-h", "--help"):
         print(cmd_comfy.__doc__)
@@ -1022,6 +1114,8 @@ def cmd_comfy(args, cfg):
         print(dim(f"Tailing ComfyUI logs — Ctrl+C to stop\n"))
         subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
                         _docker_env(cfg) + f"cd {compose_dir} && docker compose logs --tail={lines} -f"])
+    elif sub == "generate":
+        _comfy_generate(rest, cfg)
     else:
         print(red(f"Unknown comfy subcommand: {sub}"))
         print(f"  Run {cyan('spark comfy --help')} for usage.")
