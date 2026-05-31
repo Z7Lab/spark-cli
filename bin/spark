@@ -17,6 +17,8 @@ Usage:
     spark queue <repo> <name> <pattern> [<repo> <name> <pattern> ...]
                                          Queue multiple downloads to run sequentially
     spark logs-dl                        Tail the download queue log
+    spark transcribe <start|stop|status|logs>
+                                         Manage whisper-server for audio transcription
     spark open                           Open the built-in chat UI in browser
 
 Run `spark <command> --help` for full flag details on any command.
@@ -197,6 +199,21 @@ def cmd_status(args, cfg):
             print(f"  API      {warn('still loading...')}")
     else:
         print(f"  Server   {dim('not running')}  Run: {cyan('spark serve <model>')}")
+
+    # Whisper server
+    w_pid = ssh(cfg, "pgrep -f whisper-server | head -1 || true")
+    if w_pid:
+        w_model = ""
+        w_line  = ssh(cfg, f"ps -p {w_pid} -o args= 2>/dev/null || true")
+        if "-m " in w_line:
+            w_model = f"  {dim(Path(w_line.split('-m ')[1].strip().split()[0]).stem)}"
+        w_health = ssh(cfg, "curl -sf http://localhost:8081/health || echo unreachable")
+        if "ok" in w_health.lower() or "whisper" in w_health.lower():
+            print(f"  Whisper  {ok('whisper-server')}{w_model}  http://{host}:8081/v1/audio/transcriptions")
+        else:
+            print(f"  Whisper  {warn('starting...')}")
+    else:
+        print(f"  Whisper  {dim('not running')}  Run: {cyan('spark transcribe start')}")
 
     # Disk
     disk = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $4\" free of \"$2}}'")
@@ -512,6 +529,110 @@ def cmd_logs_dl(args, cfg):
                     "tail -f ~/models/download.log"])
 
 
+def cmd_transcribe(args, cfg):
+    """Manage the whisper-server for audio transcription.
+
+    Usage: spark transcribe <subcommand> [options]
+
+    Subcommands:
+      start [--model M] [--port N]   Start whisper-server (default: large-v3, port 8081)
+      stop                           Stop the running whisper-server
+      status                         Show whisper-server state and endpoint
+      logs [--lines N]               Tail the whisper-server log
+
+    The server exposes an OpenAI-compatible endpoint at:
+      http://<dgx-host>:8081/v1/audio/transcriptions
+
+    Point any OpenAI-compatible client at it (e.g. mdkb remote provider).
+
+    Examples:
+      spark transcribe start
+      spark transcribe start --model medium --port 8082
+      spark transcribe stop
+      spark transcribe status
+    """
+    if not args or "--help" in args or "-h" in args:
+        print(cmd_transcribe.__doc__)
+        return
+
+    sub = args[0]
+    rest = args[1:]
+
+    whisper_bin = "~/whisper.cpp/build/bin/whisper-server"
+    whisper_log = "~/whisper-server.log"
+    models_dir  = "~/whisper.cpp/models"
+
+    if sub == "start":
+        model = _flag_str(rest, "--model", "large-v3")
+        port  = _flag(rest, "--port", 8081)
+
+        model_file = ssh(cfg, f"find {models_dir} -name 'ggml-{model}.bin' 2>/dev/null | head -1")
+        if not model_file:
+            print(fail(f"Model ggml-{model}.bin not found in {models_dir}"))
+            print(f"  Download it on the DGX with:")
+            print(f"  {cyan(f'cd ~/whisper.cpp && ./models/download-ggml-model.sh {model}')}")
+            sys.exit(1)
+
+        existing = ssh(cfg, "pgrep -f whisper-server || true")
+        if existing:
+            print(yellow(f"⚠ Stopping existing whisper-server (pid {existing.split()[0]})..."))
+            ssh(cfg, "pkill -f whisper-server || true")
+            import time; time.sleep(1)
+
+        print(f"Starting whisper-server  {cyan(model)}  on port {port}...")
+        serve_cmd = f"nohup {whisper_bin} -m {model_file} --port {port} --host 0.0.0.0 > {whisper_log} 2>&1 &"
+        ssh(cfg, serve_cmd, capture=False)
+
+        import time
+        for i in range(15):
+            time.sleep(2)
+            health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
+            if "ok" in health.lower() or "whisper" in health.lower():
+                print(f"\n  {ok('whisper-server ready')}")
+                endpoint = f"http://{cfg['dgx_host']}:{port}/v1/audio/transcriptions"
+                print(f"  Endpoint  {cyan(endpoint)}")
+                print(f"  mdkb config: audio_provider=remote, audio_api_base=http://{cfg['dgx_host']}:{port}")
+                return
+            print(f"\r  Starting... ({(i+1)*2}s)", end="", flush=True)
+        print(f"\n  {warn('Still starting')} — run: {cyan('spark transcribe logs')}")
+
+    elif sub == "stop":
+        pid = ssh(cfg, "pgrep -f whisper-server || true")
+        if not pid:
+            print(dim("whisper-server is not running."))
+            return
+        ssh(cfg, "pkill -f whisper-server || true")
+        print(ok("whisper-server stopped."))
+
+    elif sub == "status":
+        port = _flag(rest, "--port", 8081)
+        pid  = ssh(cfg, "pgrep -f whisper-server | head -1 || true")
+        if pid:
+            print(f"  Transcription  {ok('whisper-server')}  (pid {pid})")
+            model_line = ssh(cfg, f"ps -p {pid} -o args= 2>/dev/null || true")
+            if "-m " in model_line:
+                mfile = model_line.split("-m ")[1].strip().split()[0]
+                print(f"  Model          {cyan(Path(mfile).stem)}")
+            health = ssh(cfg, f"curl -sf http://localhost:{port}/health || echo unreachable")
+            if "ok" in health.lower() or "whisper" in health.lower():
+                endpoint = f"http://{cfg['dgx_host']}:{port}/v1/audio/transcriptions"
+                print(f"  Endpoint       {ok(endpoint)}")
+            else:
+                print(f"  Endpoint       {warn('still starting...')}")
+        else:
+            print(f"  Transcription  {dim('not running')}  Run: {cyan('spark transcribe start')}")
+
+    elif sub == "logs":
+        lines = _flag(rest, "--lines", 20)
+        print(dim(f"Tailing whisper-server log — Ctrl+C to stop\n"))
+        subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
+                        f"tail -n {lines} -f {whisper_log}"])
+    else:
+        print(red(f"Unknown transcribe subcommand: {sub}"))
+        print(f"  Run {cyan('spark transcribe --help')} for usage.")
+        sys.exit(1)
+
+
 def cmd_open(args, cfg):
     """Open the built-in llama-server chat UI in the default browser.
 
@@ -554,8 +675,9 @@ COMMANDS = {
     "logs":     cmd_logs,
     "logs-dl":  cmd_logs_dl,
     "download": cmd_download,
-    "queue":    cmd_queue,
-    "open":     cmd_open,
+    "queue":      cmd_queue,
+    "transcribe": cmd_transcribe,
+    "open":       cmd_open,
 }
 
 # ── Help ──────────────────────────────────────────────────────────────────────
