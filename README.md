@@ -106,7 +106,7 @@ UI at: `http://gx10-<id>.local:8188`
 
 ## Audio transcription (Whisper)
 
-whisper-server (whisper.cpp) — same ggml/CUDA backend as llama.cpp. OpenAI-compatible endpoint.
+whisper-server (whisper.cpp) — same ggml/CUDA backend as llama.cpp. Serves an OpenAI-compatible transcription endpoint.
 
 ```bash
 spark transcribe start                      # default: large-v3, port 8081
@@ -119,6 +119,8 @@ spark transcribe logs
 Endpoint: `http://gx10-<id>.local:8081/v1/audio/transcriptions`
 
 Point any OpenAI-compatible client at it (e.g. mdkb: `audio_provider=remote`, `audio_api_base=http://gx10-<id>.local:8081`).
+
+> whisper.cpp has no native OpenAI route — `spark transcribe start` launches it with `--inference-path /v1/audio/transcriptions` so its inference handler answers there. Only that path is implemented (no `/v1/models`), and the default `json` response is OpenAI-shaped; other formats follow whisper.cpp's schema.
 
 ## Downloading models
 

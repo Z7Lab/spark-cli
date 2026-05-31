@@ -910,10 +910,12 @@ def cmd_transcribe(args, cfg):
       status                         Show whisper-server state and endpoint
       logs [--lines N]               Tail the whisper-server log
 
-    The server exposes an OpenAI-compatible endpoint at:
+    The server exposes an OpenAI-compatible transcription endpoint at:
       http://<dgx-host>:8081/v1/audio/transcriptions
 
     Point any OpenAI-compatible client at it (e.g. mdkb remote provider).
+    Only the transcription path is implemented (no /v1/models), and the
+    default json response is OpenAI-shaped — other formats follow whisper.cpp.
 
     Examples:
       spark transcribe start
@@ -963,7 +965,12 @@ def cmd_transcribe(args, cfg):
             import time; time.sleep(1)
 
         print(f"Starting whisper-server  {cyan(model)}  on port {port}...")
-        serve_cmd = f"nohup {whisper_bin} -m {model_file} --port {port} --host 0.0.0.0 > {whisper_log} 2>&1 &"
+        # Serve whisper.cpp's inference handler at the OpenAI transcription path
+        # so OpenAI-compatible clients work — whisper.cpp has no native /v1 route,
+        # but its /inference handler accepts the same multipart 'file' upload and
+        # returns {"text": ...}. --inference-path relocates it to the OpenAI path.
+        serve_cmd = (f"nohup {whisper_bin} -m {model_file} --port {port} --host 0.0.0.0 "
+                     f"--inference-path /v1/audio/transcriptions > {whisper_log} 2>&1 &")
         ssh(cfg, serve_cmd, capture=False)
 
         import time
