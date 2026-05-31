@@ -49,17 +49,18 @@ sudo chmod 600 /home/svc-spark/.ssh/authorized_keys
 ## 2. Consolidate assets under `/opt/spark`
 
 Move the whole stack under a single `svc-spark`-owned `/opt/spark` tree
-(`/opt/spark/{models,comfyui,llama.cpp,whisper.cpp,logs}`) — FHS-conventional,
+(`/opt/spark/{models,comfyui,llama.cpp,whisper.cpp,bin,logs}`) — FHS-conventional,
 single owner, off any human home, and it sets up rootless volume ownership cleanly.
 The DGX is a single filesystem, so relocating hundreds of GB of models is an
 **instant metadata-only `mv`**, not a copy.
 
 ```bash
 # Admin / svc-spark (same filesystem -> instant):
-sudo mkdir -p /opt/spark/logs
+sudo mkdir -p /opt/spark/logs /opt/spark/bin
 sudo mv ~/models /opt/spark/models
 sudo mv ~/comfyui-aeon-spark /opt/spark/comfyui
 sudo mv ~/llama.cpp ~/whisper.cpp /opt/spark/
+sudo mv ~/hf_download.py /opt/spark/bin/hf_download.py   # spark's downloader (spark download/queue)
 sudo chown -R svc-spark:svc-spark /opt/spark
 ```
 
@@ -70,6 +71,7 @@ change is needed** (see the config table in the repo README):
 {
   "dgx_user":           "svc-spark",
   "models_dir":         "/opt/spark/models",
+  "hf_dl":              "/opt/spark/bin/hf_download.py",
   "server_bin":         "/opt/spark/llama.cpp/build/bin/llama-server",
   "server_log":         "/opt/spark/logs/llama-server.log",
   "comfy_dir":          "/opt/spark/comfyui",
