@@ -5,23 +5,21 @@ spark — DGX Spark management CLI.
 Manages model serving, downloads, and status on a remote DGX Spark over SSH.
 
 Usage:
-    spark init                           First-time setup — create config file
-    spark status                         Show what's running (model, port, health)
-    spark models                         List downloaded models with sizes
-    spark serve <model> [--port N] [--ctx N] [--parallel N]
-                                         Start a model on llama-server
-    spark stop                           Stop (unload) the running model
-    spark logs                           Tail the server log  (Ctrl+C to exit)
-    spark download <repo> <name> <pattern>
-                                         Download a single model from HuggingFace
-    spark queue <repo> <name> <pattern> [<repo> <name> <pattern> ...]
-                                         Queue multiple downloads to run sequentially
-    spark logs-dl                        Tail the download queue log
-    spark comfy <start|stop|status|logs>
-                                         Manage AEON-Spark ComfyUI (image/video generation)
-    spark transcribe <start|stop|status|logs>
-                                         Manage whisper-server for audio transcription
-    spark open                           Open the built-in chat UI in browser
+    spark init                                  First-time setup — create config file
+    spark status                                Show all services (LLM, ComfyUI, Whisper, RAM)
+    spark models                                List downloaded models with quant and size
+
+    spark llm serve <model> [--quant Q] ...     Load a model onto llama-server
+    spark llm stop                              Unload the model, free GPU memory
+    spark llm logs [--lines N]                  Tail the LLM server log
+    spark llm open                              Open built-in chat UI in browser
+
+    spark comfy <start|stop|status|logs>        Manage AEON-Spark ComfyUI (port 8188)
+    spark transcribe <start|stop|status|logs>   Manage whisper-server (port 8081)
+
+    spark download <repo> <name> <pattern>      Download a single model from HuggingFace
+    spark queue <repo> <name> <pattern> [...]   Queue multiple downloads sequentially
+    spark logs-dl                               Tail the download queue log
 
 Run `spark <command> --help` for full flag details on any command.
 
@@ -783,21 +781,61 @@ def cmd_transcribe(args, cfg):
         sys.exit(1)
 
 
-def cmd_open(args, cfg):
-    """Open the built-in llama-server chat UI in the default browser.
+def cmd_llm(args, cfg):
+    """Manage the LLM inference server (llama-server).
 
-    Usage: spark open
+    Usage: spark llm <subcommand> [options]
 
-    Only works when llama-server is running — vLLM has no built-in UI.
+    Subcommands:
+      serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
+                        Load a model onto llama-server
+      stop              Unload the running model and free GPU memory
+      logs [--lines N]  Tail the llama-server log
+      open              Open the built-in chat UI in browser
+
+    Examples:
+      spark llm serve model-b
+      spark llm serve model-b --quant UD-Q3_K_XL
+      spark llm stop
+      spark llm logs
+      spark llm open
     """
-    if "--help" in args or "-h" in args:
-        print(cmd_open.__doc__)
+    _LLM_HELP = {
+        "serve": "serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]\n\n  Load a model onto llama-server. Run 'spark models' to see available names.\n\n  Options:\n    --quant Q      Quant to load if multiple available (e.g. UD-Q3_K_XL)\n    --port N       Port to bind (default: 30000)\n    --ctx N        Context window size (default: 8192)\n    --parallel N   Parallel request slots (default: 4)\n\n  Always passes: --jinja --tools all",
+        "stop":  "stop\n\n  Unload the running model and free GPU memory.\n  Does not affect whisper-server or ComfyUI.",
+        "logs":  "logs [--lines N]\n\n  Options:\n    --lines N   Lines to show before following (default: 20)",
+        "open":  "open\n\n  Open the built-in llama-server SvelteKit chat UI in your browser.",
+    }
+
+    if not args or args[0] in ("-h", "--help"):
+        print(cmd_llm.__doc__)
         return
 
-    import webbrowser
-    url = f"http://{cfg['dgx_host']}:{cfg['port']}"
-    print(f"Opening {cyan(url)}")
-    webbrowser.open(url)
+    sub  = args[0]
+    rest = args[1:]
+
+    if "--help" in rest or "-h" in rest:
+        if sub in _LLM_HELP:
+            print(f"spark llm {_LLM_HELP[sub]}")
+        else:
+            print(cmd_llm.__doc__)
+        return
+
+    if sub == "serve":
+        cmd_serve(rest, cfg)
+    elif sub == "stop":
+        cmd_stop(rest, cfg)
+    elif sub == "logs":
+        cmd_logs(rest, cfg)
+    elif sub == "open":
+        import webbrowser
+        url = f"http://{cfg['dgx_host']}:{cfg['port']}"
+        print(f"Opening {cyan(url)}")
+        webbrowser.open(url)
+    else:
+        print(red(f"Unknown llm subcommand: {sub}"))
+        print(f"  Run {cyan('spark llm --help')} for usage.")
+        sys.exit(1)
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -817,18 +855,15 @@ def _flag(args: list, name: str, default):
         return default
 
 COMMANDS = {
-    "init":     cmd_init,
-    "status":   cmd_status,
-    "models":   cmd_models,
-    "serve":    cmd_serve,
-    "stop":     cmd_stop,
-    "logs":     cmd_logs,
-    "logs-dl":  cmd_logs_dl,
-    "download": cmd_download,
-    "queue":      cmd_queue,
+    "init":       cmd_init,
+    "status":     cmd_status,
+    "models":     cmd_models,
+    "llm":        cmd_llm,
     "comfy":      cmd_comfy,
     "transcribe": cmd_transcribe,
-    "open":       cmd_open,
+    "download":   cmd_download,
+    "queue":      cmd_queue,
+    "logs-dl":    cmd_logs_dl,
 }
 
 # ── Help ──────────────────────────────────────────────────────────────────────

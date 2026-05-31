@@ -16,27 +16,27 @@ spark init
 ## Commands
 
 ```
-spark init                                  First-time setup — create ~/.config/spark.json
-spark status                                Show all services (LLM, ComfyUI, Whisper, disk)
+spark init                                        First-time setup — create ~/.config/spark.json
+spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM)
+spark models                                      List downloaded models with quant and size
 
 # LLM serving
-spark models                                List downloaded models with quant and size
-spark serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
-                                            Load a model (always passes --jinja --tools all)
-spark stop                                  Unload the running model (free GPU memory)
-spark logs [--lines N]                      Tail the LLM server log
-spark open                                  Open built-in chat UI in browser
+spark llm serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
+                                                  Load a model onto llama-server
+spark llm stop                                    Unload the model, free GPU memory
+spark llm logs [--lines N]                        Tail the LLM server log
+spark llm open                                    Open built-in chat UI in browser
 
 # Image / video generation
-spark comfy <start|stop|status|logs>        Manage AEON-Spark ComfyUI (port 8188)
+spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
 
 # Audio transcription
-spark transcribe <start|stop|status|logs>   Manage whisper-server (port 8081)
+spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
 
 # Model downloads
-spark download <repo> <name> <pattern>      Download a single model from HuggingFace
-spark queue <repo> <name> <pattern> [...]   Queue multiple downloads sequentially (background)
-spark logs-dl                               Tail the download queue log
+spark download <repo> <name> <pattern>            Download a single model from HuggingFace
+spark queue <repo> <name> <pattern> [...]         Queue multiple downloads sequentially
+spark logs-dl                                     Tail the download queue log
 ```
 
 ## LLM serving
@@ -46,16 +46,16 @@ spark logs-dl                               Tail the download queue log
 spark models
 
 # Load by name — prompts if multiple quants
-spark serve model-b
+spark llm serve model-b
 
 # Load specific quant directly (no prompt)
-spark serve model-b --quant UD-Q3_K_XL
+spark llm serve model-b --quant UD-Q3_K_XL
 
 # Switch models — automatically stops current server first
-spark serve model-d
+spark llm serve model-d
 
-# Stop / unload
-spark stop
+# Unload (frees GPU memory — does not affect whisper or ComfyUI)
+spark llm stop
 ```
 
 Chat UI (built-in, no install): `http://gx10-<id>.local:30000`
