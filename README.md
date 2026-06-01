@@ -123,10 +123,13 @@ spark comfy animate portrait.jpg "slow cinematic push-in, hair drifting" --out c
 ```
 
 Options: `--seed --out`. Requires the LTX-2.3 models on the DGX (FP8 checkpoint +
-Gemma encoder + distilled LoRA + upscaler — pull them with `spark download`, or see
-[docs/secure-deployment.md](docs/secure-deployment.md)). The i2v run takes a few
-minutes (22B model, two-stage sample + upscale + decode). The frozen graph lives in
-[templates/ltx2_i2v_api.json](templates/ltx2_i2v_api.json).
+Gemma encoder + distilled LoRA + upscaler). The i2v run takes a few minutes (22B
+model, two-stage sample + upscale + decode).
+
+📖 **[docs/media-workflows.md](docs/media-workflows.md)** — full guide: image gen,
+animation, the **cut-out → composite → animate** recipe (fly a character onto
+another scene), the model list, and **how to add a new ComfyUI workflow** as a
+spark command (the `tools/flatten_comfy_workflow.py` flatten → template → CLI flow).
 
 > **Docker permission denied?** Add your user to the `docker` group once (durable):
 > `sudo usermod -aG docker user` then log out/in. `sudo chmod 666 /var/run/docker.sock`
