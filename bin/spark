@@ -43,7 +43,7 @@ from pathlib import Path
 CONFIG_PATH = Path.home() / ".config" / "spark.json"
 
 _DEFAULTS = {
-    "dgx_host":           "gx10-<id>.local",
+    "dgx_host":           "gx10-<id>.local",   # placeholder — set yours via `spark init` / config
     "dgx_user":           "your-user",  # placeholder
     "models_dir":         "~/models",
     "server_bin":         "~/llama.cpp/build/bin/llama-server",
@@ -530,8 +530,8 @@ def cmd_serve(args, cfg):
     Flags always passed: --jinja (chat template tool calling) --tools (built-in tools in UI)
 
     Examples:
-      spark llm serve model-b                    # prompts if multiple quants
-      spark llm serve model-b --quant UD-Q3_K_XL # load specific quant directly
+      spark llm serve <model>                # prompts if multiple quants
+      spark llm serve <model> --quant Q5_K_M # load a specific quant directly
     """
     if not args or "--help" in args or "-h" in args:
         print(cmd_serve.__doc__)
@@ -813,13 +813,12 @@ def cmd_download(args, cfg):
     Usage: spark download <repo_id> <local_name> <pattern>
 
     Arguments:
-      <repo_id>      HuggingFace repo  (e.g. unsloth/model-a-GGUF)
+      <repo_id>      HuggingFace repo  (e.g. <org>/<model>-GGUF)
       <local_name>   Directory name under models_dir
-      <pattern>      Glob pattern to match files  (e.g. "*UD-Q4_K_XL*")
+      <pattern>      Glob pattern to match files  (e.g. "*Q4_K_XL*")
 
     Examples:
-      spark download unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*"
-      spark download unsloth/model-c-GGUF model-c "*Q5_K_M*"
+      spark download <org>/<model>-GGUF <local-name> "*Q4_K_XL*"
     """
     if len(args) < 3 or "--help" in args or "-h" in args:
         print(cmd_download.__doc__)
@@ -845,12 +844,8 @@ def cmd_queue(args, cfg):
 
     Examples:
       spark queue \\
-        unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*" \\
-        unsloth/model-c-GGUF model-c "*Q5_K_M*"
-
-      spark queue \\
-        unsloth/model-b-GGUF model-b "*UD-Q3_K_XL*" \\
-        unsloth/NVIDIA-model-d-120B-A12B-GGUF model-d "*UD-Q4_K_M*"
+        <org>/<model-1>-GGUF <name-1> "<glob-1>" \\
+        <org>/<model-2>-GGUF <name-2> "<glob-2>"
 
     Monitor: spark download-status
     """
@@ -1372,10 +1367,10 @@ def cmd_llm(args, cfg):
       open [--port N]         Open a model's built-in chat UI in browser
 
     Examples:
-      spark llm serve model-b --quant UD-Q3_K_XL
+      spark llm serve <model> --quant Q5_K_M
       spark llm list
       spark llm unload --port 30001
-      spark llm unload model-c
+      spark llm unload <model>
       spark llm stop
     """
     _LLM_HELP = {

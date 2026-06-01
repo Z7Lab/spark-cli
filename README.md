@@ -1,4 +1,4 @@
-# spark
+# Spark-CLI
 
 CLI for managing all services on a DGX Spark (GB10) over SSH.
 The canonical interface for anything running on the Spark — agents should use these commands rather than deploying directly to the host.
@@ -52,18 +52,18 @@ unambiguous) or by **name**.
 spark models
 
 # Load by name — prompts if multiple quants. Picks the next free port (from 30000).
-spark llm serve model-a
+spark llm serve <model>
 
 # Load a specific quant directly (no prompt)
-spark llm serve model-b --quant UD-Q3_K_XL
+spark llm serve <model> --quant Q5_K_M
 
 # Load a second model alongside — gets the next free port (30001, ...)
-spark llm serve model-c
+spark llm serve <another-model>
 
 # See what's resident, with ports and footprints
 spark llm list
-#   :30000  model-a UD-Q4_K_XL   16G  pid 115536
-#   :30001  model-c UD-Q5_K_M  25G  pid 123565
+#   :30000  model-a  Q4_K_XL  16G  pid 115536
+#   :30001  model-b  Q5_K_M   25G  pid 123565
 ```
 
 Loading never evicts another model behind your back. If a model won't fit in
@@ -71,15 +71,15 @@ free memory, `serve` **refuses** and lists what's resident so you can choose
 what to free — you stay in control of what gets unloaded:
 
 ```bash
-spark llm serve model-b --quant UD-Q3_K_XL
-#   ✗ model-b UD-Q3_K_XL needs ~94G, but only 71G is free.
+spark llm serve <large-model>
+#   ✗ <large-model> needs ~94G, but only 71G is free.
 #     Resident models (unload some to make room):
 #       :30000  model-a ...   spark llm unload --port 30000
-#       :30001  model-c ... spark llm unload --port 30001
+#       :30001  model-b ...   spark llm unload --port 30001
 
 # Unload exactly one — by port (exact) or name (refuses if a name is ambiguous)
 spark llm unload --port 30001
-spark llm unload model-a
+spark llm unload <model>
 
 # Stop everything at once
 spark llm stop
@@ -167,14 +167,13 @@ DGX at `/opt/spark/bin/`) — a small urllib downloader: no `hf` CLI required, n
 token needed for public models, resume-safe with completeness verification.
 
 ```bash
-# Single model
-spark download unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*"
+# Single model:  spark download <hf-repo> <local-name> "<file-glob>"
+spark download <hf-repo> <local-name> "*Q4_K_XL*"
 
 # Multiple models queued sequentially — HuggingFace rate-limits parallel downloads
 spark queue \
-  unsloth/model-a-GGUF model-a "*UD-Q4_K_XL*" \
-  unsloth/model-c-GGUF model-c "*Q5_K_M*" \
-  unsloth/model-b-GGUF model-b "*UD-Q3_K_XL*"
+  <hf-repo-1> <name-1> "<glob-1>" \
+  <hf-repo-2> <name-2> "<glob-2>"
 
 # Watch progress
 spark logs-dl
@@ -222,12 +221,4 @@ consolidated under a single service-account-owned `/opt/spark` tree) by editing
 `~/.config/spark.json` — no code changes. Set the keys to the new locations,
 e.g. `"comfy_dir": "/opt/spark/comfyui"`, `"models_dir": "/opt/spark/models"`.
 
-## Models on this GB10
-
-| Model | Quant | Size | Best for |
-|-------|-------|------|----------|
-| model-b | UD-Q3_K_XL | 101 GB | Best quality that fits (recommended) |
-| model-b | UD-Q2_K_XL | 86 GB | Fallback if Q3 OOMs |
-| model-d | UD-Q4_K_M | 84 GB | General chat, orchestration, 1M context |
-| model-c | UD-Q5_K_M | 39 GB | Coding, long context |
-| model-a | UD-Q4_K_XL | 17 GB | Fast tool-use, run alongside other models |
+Run `spark models` to list what's downloaded on your DGX, with quant and size.
