@@ -114,6 +114,20 @@ Options: `--width --height --steps --guidance --seed --out --model --encoder --v
 First run loads the models into the GB10's unified memory (a few minutes); after
 that, gens take ~30–60 s.
 
+**Animate a still → video** — `spark comfy animate` runs the LTX-2.3
+image-to-video pipeline (upload still → motion → MP4 downloaded locally):
+
+```bash
+spark comfy animate fox.png "the fox leaps and runs through the snow"
+spark comfy animate portrait.jpg "slow cinematic push-in, hair drifting" --out clip.mp4
+```
+
+Options: `--seed --out`. Requires the LTX-2.3 models on the DGX (FP8 checkpoint +
+Gemma encoder + distilled LoRA + upscaler — pull them with `spark download`, or see
+[docs/secure-deployment.md](docs/secure-deployment.md)). The i2v run takes a few
+minutes (22B model, two-stage sample + upscale + decode). The frozen graph lives in
+[templates/ltx2_i2v_api.json](templates/ltx2_i2v_api.json).
+
 > **Docker permission denied?** Add your user to the `docker` group once (durable):
 > `sudo usermod -aG docker user` then log out/in. `sudo chmod 666 /var/run/docker.sock`
 > works too but is ephemeral — it reverts on any daemon/socket restart (e.g. an
