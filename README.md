@@ -162,7 +162,9 @@ Point any OpenAI-compatible client at it (e.g. mdkb: `audio_provider=remote`, `a
 
 ## Downloading models
 
-Uses `~/hf_download.py` (canonical: `utility_scripts/hf-download/hf-download.py`) — no `hf` CLI required, no token needed for public models, resume-safe.
+Uses [`bin/hf_download.py`](bin/hf_download.py) (ships in this repo; deployed to the
+DGX at `/opt/spark/bin/`) — a small urllib downloader: no `hf` CLI required, no
+token needed for public models, resume-safe with completeness verification.
 
 ```bash
 # Single model

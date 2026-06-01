@@ -60,8 +60,14 @@ sudo mkdir -p /opt/spark/logs /opt/spark/bin
 sudo mv ~/models /opt/spark/models
 sudo mv ~/comfyui-aeon-spark /opt/spark/comfyui
 sudo mv ~/llama.cpp ~/whisper.cpp /opt/spark/
-sudo mv ~/hf_download.py /opt/spark/bin/hf_download.py   # spark's downloader (spark download/queue)
 sudo chown -R svc-spark:svc-spark /opt/spark
+```
+
+Deploy spark's downloader (`spark download`/`queue` run it on the DGX) — it ships
+in this repo, so copy it from your workstation:
+
+```bash
+scp bin/hf_download.py svc-spark@<host>:/opt/spark/bin/hf_download.py
 ```
 
 Then re-point spark's configurable paths in `~/.config/spark.json` — **no CLI code
