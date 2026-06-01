@@ -32,6 +32,29 @@ graph `templates/ltx2_i2v_api.json`, runs the LTX-2.3 i2v pipeline (two-stage sa
 model). Options: `--seed --out`. The audio track is steered by the prompt — describe
 "epic orchestral music" etc. to push it.
 
+### Seed variations — getting the best take
+
+LTX i2v **motion varies a lot run-to-run** for the same image+prompt (the seed
+drives the random noise the video is denoised from). The prompt sets *intent*; the
+seed decides *which* motion you actually get — one seed nails the dive, another
+walks the wrong way. So the workflow for a good clip is: **fix the prompt, sweep a
+few seeds, pick the best.** Without `--seed`, each run is a fresh random seed; pass
+`--seed N` to make a take reproducible.
+
+```bash
+# sweep 3 seeds into separate files, same prompt:
+PROMPT="…turns, walks, dives into the glowing water…"
+for s in 1111 2222 3333; do
+  spark comfy animate subject.jpg "$PROMPT" --seed "$s" --out "take_s$s.mp4"
+done
+# review the three, keep the winner. Re-run a winning seed any time to reproduce it,
+# or as a base for small prompt tweaks (keep the seed, change a few words).
+```
+
+Each take is ~2 min, so a 3-seed sweep is ~6 min. Tips: change *one* thing at a time
+(seed **or** a prompt phrase, not both) so you can tell what helped; once a seed
+gives good motion, iterate the prompt on that fixed seed to refine details.
+
 ## 3. Fly a subject onto another scene (cut-out → composite → animate)
 
 To make a character "land on" a different background (e.g. a character onto a distant
