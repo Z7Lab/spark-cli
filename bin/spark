@@ -1050,6 +1050,7 @@ def _comfy_animate(args, cfg):
 
     print(f"Animating  {cyan(p.name)}  {dim('(LTX-2.3 i2v — sampling + upscale + decode, a few min)')}")
     print(f"  Prompt: {cyan(prompt)}")
+    print(f"  Seed:   {seed}  {dim('(reproduce this take with --seed ' + str(seed) + ')')}")
     try:
         pid = json.load(urllib.request.urlopen(urllib.request.Request(
             base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
