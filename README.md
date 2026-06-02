@@ -86,13 +86,15 @@ spark llm list
 #   :30001  model-b  Q5_K_M   25G  pid 123565
 ```
 
-Loading never evicts another model behind your back. If a model won't fit in
-free memory, `serve` **refuses** and lists what's resident so you can choose
-what to free — you stay in control of what gets unloaded:
+Loading never evicts another model behind your back. The fit check estimates
+**weights + KV cache** (the KV term is read from the model's GGUF dims and scales
+with `--ctx`/`--parallel`) and requires a free **reserve** on top (`mem_reserve_gb`,
+default 8). If it won't fit, `serve` **refuses** and lists what's resident so you
+can choose what to free — you stay in control of what gets unloaded:
 
 ```bash
 spark llm serve <large-model>
-#   ✗ <large-model> needs ~94G, but only 71G is free.
+#   ✗ <large-model> needs ~121G (~77G weights + ~44G KV @ ctx 8192×4) plus a 8G reserve, but only 77G is free.
 #     Resident models (unload some to make room):
 #       :30000  model-a ...   spark llm unload --port 30000
 #       :30001  model-b ...   spark llm unload --port 30001
@@ -251,6 +253,7 @@ Config file: `~/.config/spark.json` (create with `spark init`)
 | `server_bin` | `~/llama.cpp/build/bin/llama-server` | `SPARK_SERVER_BIN` |
 | `server_log` | `~/llama-server.log` | `SPARK_SERVER_LOG` |
 | `port` | `30000` | `SPARK_PORT` |
+| `mem_reserve_gb` | `8` | `SPARK_MEM_RESERVE_GB` |
 | `comfy_dir` | `~/comfyui-aeon-spark` | `SPARK_COMFY_DIR` |
 | `whisper_bin` | `~/whisper.cpp/build/bin/whisper-server` | `SPARK_WHISPER_BIN` |
 | `whisper_log` | `~/whisper-server.log` | `SPARK_WHISPER_LOG` |

@@ -51,6 +51,10 @@ _DEFAULTS = {
     "venv":               "~/llama-cpp-venv",
     "hf_dl":              "~/hf_download.py",
     "port":               30000,
+    # Memory headroom (GB) kept free when the serve fit-check decides whether a
+    # model will load — covers the OS, page cache, and co-running services on top
+    # of the model's weights + estimated KV cache.
+    "mem_reserve_gb":     8,
     # Service asset paths — configurable so the whole stack can be relocated
     # (e.g. consolidated under a single svc-spark-owned /opt/spark tree) without
     # touching CLI code. Override per key via the env vars below or spark.json.
@@ -83,10 +87,11 @@ def load_config() -> dict:
         "SPARK_WHISPER_MODELS_DIR": "whisper_models_dir",
         "SPARK_DOWNLOAD_LOG":       "download_log",
         "SPARK_DOCKER_ROOTLESS":    "docker_rootless",
+        "SPARK_MEM_RESERVE_GB":     "mem_reserve_gb",
     }
     for env, key in env_map.items():
         if os.environ.get(env):
-            if key == "port":
+            if key in ("port", "mem_reserve_gb"):
                 cfg[key] = int(os.environ[env])
             elif key == "docker_rootless":
                 cfg[key] = os.environ[env].strip().lower() in ("1", "true", "yes", "on")
@@ -445,6 +450,79 @@ def _free_bytes(cfg: dict) -> int:
         return 0
 
 
+# Minimal GGUF metadata reader — reads only the KV header (seeks past tensor data
+# and large arrays) to recover the dims needed for a KV-cache estimate. Self-
+# contained so the fit-check never depends on gguf-py / llama tooling being
+# importable on the DGX. Prints the estimated f16 KV-cache size in bytes, or
+# nothing on any problem (caller then falls open to the reserve margin alone).
+_GGUF_KV_PROBE = r'''
+import sys, struct
+def main():
+    path, ctx, par = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+    SZ = {0:1,1:1,2:2,3:2,4:4,5:4,6:4,7:1,10:8,11:8,12:8}  # fixed-width scalar types
+    f = open(path, 'rb')
+    if f.read(4) != b'GGUF':
+        return
+    struct.unpack('<I', f.read(4))                      # version
+    struct.unpack('<Q', f.read(8))                      # tensor_count
+    kvc = struct.unpack('<Q', f.read(8))[0]             # metadata_kv_count
+    def rstr():
+        n = struct.unpack('<Q', f.read(8))[0]; return f.read(n)
+    def skip(t):
+        if t in SZ: f.seek(SZ[t], 1)
+        elif t == 8: f.seek(struct.unpack('<Q', f.read(8))[0], 1)
+        elif t == 9:
+            et = struct.unpack('<I', f.read(4))[0]; cnt = struct.unpack('<Q', f.read(8))[0]
+            if et == 8:
+                for _ in range(cnt): f.seek(struct.unpack('<Q', f.read(8))[0], 1)
+            else: f.seek(SZ[et]*cnt, 1)
+        else: raise ValueError(t)
+    want = ('block_count','attention.head_count','attention.head_count_kv',
+            'attention.key_length','embedding_length')
+    got = {}
+    for _ in range(kvc):
+        key = rstr().decode('utf-8','replace')
+        t = struct.unpack('<I', f.read(4))[0]
+        hit = next((w for w in want if key.endswith('.'+w)), None)
+        if hit and t in (4,5,10):                       # u32/i32/u64 scalar
+            v = struct.unpack({'4':'<I','5':'<i','10':'<Q'}[str(t)], f.read(SZ[t]))[0]
+            got[hit] = v
+        else:
+            skip(t)
+        if 'block_count' in got and 'embedding_length' in got and \
+           'attention.head_count' in got and 'attention.head_count_kv' in got and \
+           'attention.key_length' in got:
+            break
+    layers = got.get('block_count')
+    n_head = got.get('attention.head_count')
+    n_kv   = got.get('attention.head_count_kv', n_head)
+    head_dim = got.get('attention.key_length')
+    if head_dim is None and n_head and got.get('embedding_length'):
+        head_dim = got['embedding_length'] // n_head
+    if not (layers and n_kv and head_dim):
+        return
+    # f16 KV: 2 (K+V) * layers * n_kv * head_dim * tokens * 2 bytes
+    print(2 * layers * n_kv * head_dim * ctx * par * 2)
+try:
+    main()
+except Exception:
+    pass
+'''
+
+
+def _kv_cache_bytes(cfg: dict, model_path: str, ctx: int, par: int) -> int:
+    """Estimate the f16 KV-cache size (bytes) by reading the model's GGUF header.
+    Returns 0 if it can't be determined — the reserve margin then carries the check."""
+    import shlex
+    cmd = (f"python3 - {shlex.quote(model_path)} {int(ctx)} {int(par)} "
+           f"<<'PYEOF'\n{_GGUF_KV_PROBE}\nPYEOF")
+    out = ssh(cfg, cmd)
+    try:
+        return int(out.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return 0
+
+
 def _human(n: int) -> str:
     """Format a byte count as a short human-readable size (e.g. 78G)."""
     f = float(n)
@@ -511,9 +589,11 @@ def cmd_serve(args, cfg):
     """Start (load) a model on its own llama-server.
 
     Each model runs as a separate llama-server on its own port, so several can
-    be loaded at once. If the model will not fit in free memory, serve refuses
-    and lists the resident models rather than evicting any — use 'spark llm
-    unload' to free space yourself.
+    be loaded at once. Before loading, serve estimates the footprint (weights +
+    KV cache, which scales with --ctx/--parallel) and requires a free reserve on
+    top (mem_reserve_gb, default 8); if it won't fit it refuses and lists the
+    resident models rather than evicting any — use 'spark llm unload' to free
+    space yourself.
 
     Usage: spark llm serve <model> [options]
 
@@ -614,19 +694,28 @@ def cmd_serve(args, cfg):
         while str(port) in used_ports:
             port += 1
 
-    # Deterministic fit check — refuse rather than silently evict.
-    needed = _du_bytes(cfg, _quant_glob(model_path, quant))
-    avail  = _free_bytes(cfg)
-    if needed and avail and needed > avail:
-        print(fail(f"{name} {quant} needs ~{_human(needed)}, but only "
-                   f"{_human(avail)} is free."))
+    # Deterministic fit check — refuse rather than silently evict. The estimate is
+    # weights (on disk) + KV cache (from GGUF dims, scales with ctx×parallel), and
+    # must leave a reserve margin free for the OS and co-running services.
+    weights = _du_bytes(cfg, _quant_glob(model_path, quant))
+    kv      = _kv_cache_bytes(cfg, model_path, ctx, par)
+    reserve = int(cfg.get("mem_reserve_gb", 8)) * 1024**3
+    needed  = weights + kv
+    avail   = _free_bytes(cfg)
+    if needed and avail and needed + reserve > avail:
+        kv_part = f" + ~{_human(kv)} KV @ ctx {ctx}×{par}" if kv else ""
+        print(fail(f"{name} {quant} needs ~{_human(needed)} "
+                   f"(~{_human(weights)} weights{kv_part}) plus a {_human(reserve)} "
+                   f"reserve, but only {_human(avail)} is free."))
         if instances:
             print(dim("  Resident models (unload some to make room):"))
             for inst in instances:
                 sz   = _human(_du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"])))
                 hint = dim(f"spark llm unload --port {inst['port']}")
                 print(f"    :{inst['port']}  {cyan(inst['name'])} {dim(inst['quant'])}  {sz}   {hint}")
-        print(dim("  (estimate is model size on disk; KV cache adds more)"))
+        if not kv:
+            print(dim("  (KV cache could not be estimated; weights + reserve only)"))
+        print(dim("  Free memory, lower --ctx/--parallel, or adjust mem_reserve_gb."))
         sys.exit(1)
 
     session = f"llama-{port}"
