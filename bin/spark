@@ -13,7 +13,7 @@ Usage:
     spark llm list                              Show loaded models, ports, footprints
     spark llm unload <name|--port N>            Unload one model, free its memory
     spark llm stop                              Stop ALL LLM servers at once
-    spark llm logs [--port N]                   Tail a server log
+    spark llm logs [--port N] [--lines N]        Tail a server log
     spark llm open [--port N]                   Open built-in chat UI in browser
 
     spark comfy <start|stop|status|logs>        Manage AEON-Spark ComfyUI (port 8188)

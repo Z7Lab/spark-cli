@@ -3,10 +3,17 @@
 CLI for managing all services on a DGX Spark (GB10) over SSH.
 The canonical interface for anything running on the Spark — agents should use these commands rather than deploying directly to the host.
 
+## Prerequisites
+
+- **SSH access** to a DGX Spark (GB10) host — `spark` manages the remote host entirely over SSH, so the DGX must be reachable and your key trusted before `spark init`.
+- **Remote services** must be set up on the DGX before the corresponding `spark` commands will work: `llama-server` (for `spark llm`), a running ComfyUI container (for `spark comfy`), and `whisper-server` (for `spark transcribe`). See [docs/secure-deployment.md](docs/secure-deployment.md) for the recommended DGX setup.
+- **Python 3** on your workstation (stdlib only — no pip installs, no venv).
+
 ## Setup
 
 ```bash
-# Add to PATH (already added to ~/.bashrc)
+# Add this to your ~/.bashrc (or equivalent shell profile),
+# adjusting the path to match your actual checkout location:
 export PATH="$HOME/dev/projects/spark/bin:$PATH"
 
 # First-time config
@@ -179,6 +186,10 @@ spark queue \
 spark logs-dl
 ```
 
+For the concrete model names required by each `spark comfy` workflow (FLUX.2, LTX-2.3
+i2v, etc.) and their HuggingFace sources, see the **Models** table in
+[docs/media-workflows.md](docs/media-workflows.md#models).
+
 ## Troubleshooting
 
 The spark CLI prints the exact remedy at the point of failure; this table is the
@@ -197,6 +208,18 @@ same set, kept in one scannable place. Commands run **on the DGX** unless noted
 | `spark status` → `SSH unreachable`; `gx10-*.local` won't resolve | mDNS/avahi not resolving the `.local` host, or wrong host/key | Test `ssh user@gx10-<id>.local`. Ensure `avahi-daemon` is running on the DGX, or set `dgx_host` to its IP in `~/.config/spark.json` |
 | `no config file — using defaults` | `~/.config/spark.json` not created yet | `spark init` |
 | Download queue stalls or errors | HuggingFace rate-limits parallel downloads; `spark queue` runs them sequentially for this reason | `spark logs-dl` to see the failure. Re-running is resume-safe; avoid launching parallel downloads |
+
+## Architecture & design decisions
+
+`spark` is a single Python file (`bin/spark`) that runs on the **operator's workstation** and reaches the DGX entirely over SSH. There is no daemon, no background service, and no persistent process on the workstation side.
+
+Key design choices — each is intentional, not accidental:
+
+- **SSH-based remote management.** Every command shells out to `ssh user@host '...'`. No agent runs on the DGX; the DGX is managed like a remote host, not a peer.
+- **One `llama-server` process per model.** Each loaded model gets its own port. This makes unloading precise (kill one process, free exactly that model's VRAM), avoids a multiplexing router, and keeps port numbers as stable identifiers (`--port 30000` always means that one model).
+- **`screen` sessions for process persistence.** `llama-server` and `whisper-server` run in detached `screen` sessions so they outlive the SSH connection that started them.
+- **Zero Python dependencies.** `bin/spark`, `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only. The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
+- **All service paths are configurable.** Every binary, log, and model directory is a config key in `~/.config/spark.json`. Relocating the whole stack (e.g. to `/opt/spark` under a `svc-spark` service account) is a config edit, not a code change.
 
 ## Config
 

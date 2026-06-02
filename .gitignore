@@ -1,3 +1,13 @@
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Editor / OS
+.DS_Store
+*.swp
+*.swo
+*~
+
 # dispatcher sandbox artifacts
 .mcp.json
 .dispatcher/

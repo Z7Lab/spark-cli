@@ -34,9 +34,10 @@ grep svc-spark /etc/subuid /etc/subgid || \
 # SSH key install. NOTE: useradd creates svc-spark with a LOCKED password, so
 # `ssh-copy-id svc-spark@host` does NOT work (nothing to authenticate with). The
 # admin installs the key directly — simplest is to reuse the key the primary login
-# already trusts, so the workstation key that reaches `user` also reaches svc-spark:
+# already trusts, so the workstation key that reaches the primary admin also reaches svc-spark.
+# Replace <your-username> with the actual primary admin login name on the DGX:
 sudo install -d -m 700 -o svc-spark -g svc-spark /home/svc-spark/.ssh
-sudo cp /home/user/.ssh/authorized_keys /home/svc-spark/.ssh/authorized_keys
+sudo cp /home/<your-username>/.ssh/authorized_keys /home/svc-spark/.ssh/authorized_keys
 sudo chown svc-spark:svc-spark /home/svc-spark/.ssh/authorized_keys
 sudo chmod 600 /home/svc-spark/.ssh/authorized_keys
 ```
@@ -188,5 +189,10 @@ Own the supply chain — all four layers:
 ## See also
 
 - General *Docker Host Security Guide* (internal KB) — threat model, containment
-  architectures, the full rationale behind these decisions.
-- Repo `README.md` — the configurable service paths and the Troubleshooting table.
+  architectures, and the full rationale behind these decisions. This document lives
+  in the author's internal knowledge base and is not accessible outside that
+  environment; the threat model it covers (container escape → host root via a
+  compromised third-party image) is summarised in the preamble of this runbook, and
+  the key decisions (rootless Docker + CDI, supply-chain pipeline, least-privilege
+  service account) are each explained inline in their respective sections above.
+- [README.md](../README.md) — the configurable service paths and the Troubleshooting table.

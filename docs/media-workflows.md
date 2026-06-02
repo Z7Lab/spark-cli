@@ -27,7 +27,7 @@ spark comfy animate fox.png "the fox leaps and runs through the snow"
 spark comfy animate portrait.jpg "slow cinematic push-in, hair drifting" --out clip.mp4
 ```
 Uploads the image to ComfyUI, injects it + the motion prompt + seed into the frozen
-graph `templates/ltx2_i2v_api.json`, runs the LTX-2.3 i2v pipeline (two-stage sample
+graph [`templates/ltx2_i2v_api.json`](../templates/ltx2_i2v_api.json), runs the LTX-2.3 i2v pipeline (two-stage sample
 + spatial upscale + AV decode), and downloads the MP4. A few minutes per clip (22B
 model). Options: `--seed --out`. The audio track is steered by the prompt — describe
 "epic orchestral music" etc. to push it.
@@ -102,7 +102,7 @@ queue time; there's no server endpoint for it. So we flatten **once**, freeze th
 result as a template, and let the CLI patch it at runtime:
 
 ```
-ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ templates/<x>.json ──(spark)──▶ /prompt
+ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ templates/<x>.json ──(bin/spark)──▶ /prompt
 ```
 
 **To add a new ComfyUI workflow as a spark command:**
@@ -113,18 +113,18 @@ ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ tem
    ```bash
    ssh svc-spark@<host> 'python3 -' < tools/flatten_comfy_workflow.py \
      ... # or scp the workflow back and run the tool locally against http://<host>:8188
-   python3 tools/flatten_comfy_workflow.py the_workflow.json --comfy http://<host>:8188 \
+   python3 [tools/flatten_comfy_workflow.py](../tools/flatten_comfy_workflow.py) the_workflow.json --comfy http://<host>:8188 \
      > templates/the_workflow_api.json
    ```
    The tool prints (to stderr) the `LoadImage` node ids and the prompt node id —
    the parameterisable hooks.
-3. Add a `_comfy_<verb>` function in `bin/spark` (copy `_comfy_animate`): load the
+3. Add a `_comfy_<verb>` function in [`bin/spark`](../bin/spark) (copy `_comfy_animate`): load the
    template, patch the hooks by `class_type` (`LoadImage` → image, prompt node →
    text, `RandomNoise` → seed), POST `/prompt`, poll `/history`, download via
    `/view`.
 4. Wire it into `cmd_comfy` dispatch + `_COMFY_HELP` + the README.
 
-`tools/flatten_comfy_workflow.py` documents the non-obvious gotchas it handles
+[`tools/flatten_comfy_workflow.py`](../tools/flatten_comfy_workflow.py) documents the non-obvious gotchas it handles
 (Reroute passthroughs, the `["COMBO", …]` object_info shape, consuming
 widgets_values slots for promoted widgets, the templated `ResizeImageMaskNode`,
 and the `-10` subgraph-input origin).
@@ -142,4 +142,6 @@ Pull any model with our resume-safe downloader (verifies completeness):
 ```bash
 ssh svc-spark@<host> 'python3 /opt/spark/bin/hf_download.py <repo_id> <dest_dir> "<glob>"'
 ```
-The AEON-Spark `download_models.py` lists the full catalog and its dest subdirs.
+The AEON-Spark `download_models.py` (located on the DGX, not in this repo) lists the
+full model catalog with HuggingFace repo IDs, destination subdirectories under
+`/opt/spark/comfyui/workspace/models/`, and the file globs for each model.
