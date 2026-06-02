@@ -1,0 +1,43 @@
+{
+  "_comment": "Editable model catalog for spark's `pull-models` commands. Copy this to ~/.config/spark.models.json and edit it to set up your own models — the pull commands prefer that file and fall back to this repo example. Every repo below is PUBLIC (no HuggingFace token needed). Pulled with the bundled bin/hf_download.py.",
+
+  "comfy": {
+    "_comment": "Required by `spark comfy generate` (FLUX.2) and `animate` (LTX-2.3). Fixed dependency set — landed (via --flat) in ComfyUI's models/<subdir>/<file>. Edit only if you swap the comfy workflows.",
+    "generate": [
+      { "repo_id": "Comfy-Org/flux2-dev", "glob": "flux2_dev_fp8mixed.safetensors",        "subdir": "diffusion_models", "label": "FLUX.2 Dev DiT (fp8 mixed)" },
+      { "repo_id": "Comfy-Org/flux2-dev", "glob": "flux2-vae.safetensors",                  "subdir": "vae",              "label": "FLUX.2 VAE" },
+      { "repo_id": "Comfy-Org/flux2-dev", "glob": "mistral_3_small_flux2_bf16.safetensors", "subdir": "text_encoders",    "label": "FLUX.2 Mistral-3 Small text encoder (BF16)" }
+    ],
+    "animate": [
+      { "repo_id": "Lightricks/LTX-2.3-fp8", "glob": "ltx-2.3-22b-dev-fp8.safetensors",            "subdir": "checkpoints",           "label": "LTX-2.3 22B Dev FP8 checkpoint" },
+      { "repo_id": "Comfy-Org/ltx-2",        "glob": "gemma_3_12B_it_fp4_mixed.safetensors",       "subdir": "text_encoders",         "label": "Gemma-3 12B IT text encoder (NVFP4 mixed)" },
+      { "repo_id": "Lightricks/LTX-2.3",     "glob": "ltx-2.3-22b-distilled-lora-384.safetensors", "subdir": "loras",                 "label": "LTX-2.3 distilled LoRA-384" },
+      { "repo_id": "Lightricks/LTX-2.3",     "glob": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors","subdir": "latent_upscale_models", "label": "LTX-2.3 spatial upscaler x2 v1.1" }
+    ]
+  },
+
+  "whisper": {
+    "_comment": "ggml models for `spark transcribe`, from ggerganov/whisper.cpp. Landed in whisper_models_dir as ggml-<model>.bin. `spark transcribe pull-models` pulls large-v3 by default; --model <name> or --all for others.",
+    "models": [
+      { "model": "large-v3", "repo_id": "ggerganov/whisper.cpp", "glob": "ggml-large-v3.bin", "label": "Whisper large-v3 (best quality)" },
+      { "model": "medium",   "repo_id": "ggerganov/whisper.cpp", "glob": "ggml-medium.bin",   "label": "Whisper medium" },
+      { "model": "small",    "repo_id": "ggerganov/whisper.cpp", "glob": "ggml-small.bin",    "label": "Whisper small" },
+      { "model": "base",     "repo_id": "ggerganov/whisper.cpp", "glob": "ggml-base.bin",     "label": "Whisper base" },
+      { "model": "tiny",     "repo_id": "ggerganov/whisper.cpp", "glob": "ggml-tiny.bin",     "label": "Whisper tiny (fastest)" }
+    ]
+  },
+
+  "llm": {
+    "_comment": "GGUF chat models picked for the DGX Spark (GB10): 128 GB unified memory lets large mixture-of-experts (MoE) models fit that won't run on a typical discrete GPU, while low active-parameter counts (A3B/A12B) keep inference fast on the Spark's memory-bandwidth profile. All are Unsloth Dynamic (UD) quants — UD-Q*_K_XL/M keep more bits in the sensitive layers than uniform K-quants, so a model squeezed into a fixed memory budget loses less quality. `name` is the dir under models_dir and how `spark llm serve <name>` addresses it; `glob` selects the quant (multi-part shards download together). Pulled with --flat by `spark llm pull-models`. Edit/extend freely — these are the validated set, not a fixed requirement.",
+    "models": [
+      { "repo_id": "unsloth/GLM-4.7-Flash-GGUF",                       "name": "GLM-4.7-Flash",    "glob": "*UD-Q4_K_XL*",  "flat": true, "label": "GLM-4.7-Flash · UD-Q4_K_XL · ~17.5 GB",
+        "why": "Compact, fast general/coding MoE. Smallest footprint here — leave it resident and co-load a second model alongside." },
+      { "repo_id": "unsloth/Qwen3.6-35B-A3B-GGUF",                     "name": "Qwen3.6-35B-A3B",  "glob": "*UD-Q5_K_M*",   "flat": true, "label": "Qwen3.6-35B-A3B · UD-Q5_K_M · ~26.5 GB",
+        "why": "35B MoE with only 3B active — high quality at Q5 for a modest footprint. Strong all-round/agentic daily driver." },
+      { "repo_id": "unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF",  "name": "Nemotron-3-Super", "glob": "*UD-Q4_K_M*",   "flat": true, "label": "NVIDIA Nemotron-3-Super 120B-A12B · UD-Q4_K_M · ~82.5 GB",
+        "why": "NVIDIA's own 120B MoE (12B active), tuned for their stack. Fits the 128 GB UMA — the class of model the Spark exists to run." },
+      { "repo_id": "unsloth/MiniMax-M2.5-GGUF",                       "name": "MiniMax-M2.5",     "glob": "*UD-Q3_K_XL*",  "flat": true, "label": "MiniMax-M2.5 · UD-Q3_K_XL · ~101 GB (4 shards)",
+        "why": "Largest single model that fits the box — UD-Q3_K_XL trades bits for capacity while the dynamic quant preserves quality. Run it solo; it nearly fills unified memory." }
+    ]
+  }
+}

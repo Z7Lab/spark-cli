@@ -133,8 +133,8 @@ and the `-10` subgraph-input origin).
 
 ## Models
 
-The catalog the comfy commands need ships in the repo as
-[`templates/comfy_models.json`](../templates/comfy_models.json) (repo id · file
+The catalog the comfy commands need ships in the repo as the `comfy` section of
+[`templates/models.example.json`](../templates/models.example.json) (repo id · file
 glob · destination subdir under `models/`). Pull it onto the DGX with one command:
 
 ```bash
@@ -158,6 +158,9 @@ no token required.
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `loras/ltx-2.3-22b-distilled-lora-384.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors` |
 
-To add a model, append an entry to `templates/comfy_models.json` — no code change.
-For a one-off pull outside the catalog, call the downloader directly:
+To add a model, append an entry to the `comfy` section of the catalog — no code
+change. The same file's `whisper` and `llm` sections feed `spark transcribe
+pull-models` and `spark llm pull-models`; copy it to `~/.config/spark.models.json`
+to customize without touching the repo. For a one-off pull outside the catalog,
+call the downloader directly:
 `ssh <user>@<host> 'python3 <hf_dl> <repo_id> <dest_dir> "<glob>" --flat'`.

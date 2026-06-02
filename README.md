@@ -44,12 +44,22 @@ spark comfy pull-models [--set generate|animate|all]  Download the models those 
 
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
+spark transcribe pull-models [--model M|--all]    Download whisper ggml model(s)
 
 # Model downloads
+spark llm pull-models [<name>...|--all]           Download catalog LLM model(s) (lists sizes if no args)
 spark download <repo> <name> <pattern>            Download a single model from HuggingFace
 spark queue <repo> <name> <pattern> [...]         Queue multiple downloads sequentially
 spark logs-dl                                     Tail the download queue log
 ```
+
+Models for each service are listed in an editable catalog,
+[`templates/models.example.json`](templates/models.example.json) (sections:
+`comfy`, `whisper`, `llm`). Copy it to `~/.config/spark.models.json` and edit to
+pick your own — the `pull-models` commands prefer that file, falling back to the
+repo example. The `llm` section lists large MoE models validated for the GB10's
+128 GB unified memory in Unsloth Dynamic (UD) quants — each entry carries the quant,
+footprint, and rationale (run `spark llm pull-models` to see them). Edit freely.
 
 ## LLM serving
 
@@ -113,7 +123,7 @@ spark comfy logs
 UI at: `http://gx10-<id>.local:8188`
 
 **First, the models** — `spark comfy pull-models` downloads everything `generate`
-and `animate` need (from the in-repo catalog `templates/comfy_models.json`, via the
+and `animate` need (from the model catalog `templates/models.example.json`, via the
 bundled downloader) into ComfyUI's models dir on the DGX. `--set generate` or
 `--set animate` pulls just one. Resume-safe; all repos are public.
 

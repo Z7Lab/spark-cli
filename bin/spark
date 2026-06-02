@@ -1088,13 +1088,62 @@ def _comfy_animate(args, cfg):
     print(f"  On DGX: {dim(cfg['comfy_dir'] + '/workspace/output/' + vid['filename'])}")
 
 
-def _comfy_pull_models(args, cfg):
-    """Download the models the comfy commands need, using bin/hf_download.py.
+MODELS_USER_PATH = Path.home() / ".config" / "spark.models.json"
 
-    Reads the in-repo catalog (templates/comfy_models.json) and pulls each entry
-    onto the DGX at <comfy_dir>/workspace/models/<subdir>/<file> (ComfyUI's flat
-    layout, via hf_download.py --flat). Lets a fresh checkout reproduce the exact
-    model set with our own tooling — no DGX-only catalog required.
+
+def _models_catalog():
+    """Load the model catalog. Prefer the user's editable ~/.config/spark.models.json,
+    else fall back to the repo example. Returns (catalog_dict, source_path)."""
+    repo_example = Path(__file__).resolve().parent.parent / "templates" / "models.example.json"
+    path = MODELS_USER_PATH if MODELS_USER_PATH.exists() else repo_example
+    return json.loads(path.read_text()), path
+
+
+def _run_pull(cfg, jobs, done_hint=""):
+    """Pull a list of download jobs with the bundled hf_download.py.
+
+    Each job: {repo, dest, glob, label, flat?}. The downloader is synced to the
+    DGX first — a stale remote copy silently ignores --flat (placing files in
+    nested split_files/ dirs), and keeping the engine current is cheap insurance.
+    """
+    if not jobs:
+        print(warn("Nothing to pull (catalog section is empty)."))
+        return
+
+    local_engine = Path(__file__).resolve().parent / "hf_download.py"
+    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{cfg['hf_dl']}"))
+    if subprocess.run(["scp", "-q", str(local_engine),
+                       f"{cfg['dgx_user']}@{cfg['dgx_host']}:{cfg['hf_dl']}"]).returncode != 0:
+        print(fail("Could not deploy the downloader to the DGX (scp failed)."))
+        sys.exit(1)
+
+    n = len(jobs)
+    print(bold(f"Pulling {n} model(s):\n"))
+    for i, j in enumerate(jobs, 1):
+        print(f"  {bold(str(i))}/{n}  {cyan(j['label'])}")
+        print(f"     {dim(j['repo'])} → {dim(j['dest'])}")
+    print()
+
+    chain = " && ".join(
+        f"echo '[{i}/{n}] {j['label']}' && "
+        f"python3 {cfg['hf_dl']} {j['repo']} {j['dest']} '{j['glob']}'" + (" --flat" if j.get("flat") else "")
+        for i, j in enumerate(jobs, 1)
+    )
+    rc = subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}", chain]).returncode
+    if rc == 0:
+        print(ok(f"\nDone.{(' ' + done_hint) if done_hint else ''}"))
+    else:
+        print(fail(f"\nPull exited with status {rc} — re-run to resume (downloads are resume-safe)."))
+        sys.exit(rc)
+
+
+def _comfy_pull_models(args, cfg):
+    """Download the FLUX.2 / LTX-2.3 models the comfy commands need.
+
+    Reads the `comfy` section of the model catalog and lands each entry (via
+    hf_download.py --flat) at <comfy_dir>/workspace/models/<subdir>/<file> —
+    ComfyUI's flat layout. A fresh checkout reproduces the model set with the
+    repo's own tooling, no DGX-only catalog required.
     """
     valid = ("generate", "animate", "all")
     which = _flag(args, "--set", "all")
@@ -1106,42 +1155,16 @@ def _comfy_pull_models(args, cfg):
             print(red(f"\n  Invalid --set '{which}' (use: {', '.join(valid[:-1])}, all)"))
         return
 
-    manifest = Path(__file__).resolve().parent.parent / "templates" / "comfy_models.json"
-    catalog = json.loads(manifest.read_text())
+    catalog, _ = _models_catalog()
+    comfy = catalog.get("comfy", {})
     sets = ["generate", "animate"] if which == "all" else [which]
-    entries = [e for s in sets for e in catalog.get(s, [])]
-
-    # pull-models relies on hf_download.py --flat to land files in ComfyUI's flat
-    # models/<type>/ layout. A stale engine on the DGX silently ignores --flat and
-    # re-downloads into nested split_files/ dirs — so sync the in-repo engine first.
-    local_engine = Path(__file__).resolve().parent / "hf_download.py"
-    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{cfg['hf_dl']}"))
-    sync = subprocess.run(["scp", "-q", str(local_engine),
-                           f"{cfg['dgx_user']}@{cfg['dgx_host']}:{cfg['hf_dl']}"]).returncode
-    if sync != 0:
-        print(fail(f"Could not deploy {local_engine.name} to the DGX (scp exit {sync})."))
-        sys.exit(sync)
-
     models_root = f"{cfg['comfy_dir']}/workspace/models"
-    print(bold(f"Pulling {len(entries)} model(s) for: {', '.join(sets)}\n"))
-    for i, e in enumerate(entries, 1):
-        dest = f"{models_root}/{e['subdir']}"
-        print(f"  {bold(str(i))}/{len(entries)}  {cyan(e['label'])}")
-        print(f"     {dim(e['repo_id'])} → {dim(e['subdir'] + '/' + e['glob'])}")
-    print()
-
-    n = len(entries)
-    chain = " && ".join(
-        f"echo '[{i}/{n}] {e['label']}' && "
-        f"python3 {cfg['hf_dl']} {e['repo_id']} {models_root}/{e['subdir']} '{e['glob']}' --flat"
-        for i, e in enumerate(entries, 1)
-    )
-    rc = subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}", chain]).returncode
-    if rc == 0:
-        print(ok(f"\nDone. Verify with {cyan('spark comfy status')} and re-run a gen."))
-    else:
-        print(fail(f"\nPull exited with status {rc} — re-run to resume (downloads are resume-safe)."))
-        sys.exit(rc)
+    jobs = [
+        {"repo": e["repo_id"], "dest": f"{models_root}/{e['subdir']}",
+         "glob": e["glob"], "label": e["label"], "flat": True}
+        for s in sets for e in comfy.get(s, [])
+    ]
+    _run_pull(cfg, jobs, done_hint=f"Verify with {cyan('spark comfy status')} and re-run a gen.")
 
 
 def cmd_comfy(args, cfg):
@@ -1178,7 +1201,7 @@ def cmd_comfy(args, cfg):
         "logs":   "logs [--lines N]  Tail the ComfyUI container logs\n\n  Options:\n    --lines N   Lines to show before following (default: 50)",
         "generate": "generate \"<prompt>\" [options]\n\n  Generate a FLUX.2 text-to-image render and download the PNG locally.\n\n  Options:\n    --width N      Image width  (default: 1024)\n    --height N     Image height (default: 1024)\n    --steps N      Sampling steps (default: 20)\n    --guidance G   FLUX guidance (default: 3.5)\n    --seed N       Seed (default: random)\n    --out PATH     Local output path (default: ./<filename>.png)\n    --model M      Diffusion model (default: flux2_dev_fp8mixed.safetensors)\n    --encoder E    Text encoder (default: mistral_3_small_flux2_bf16.safetensors)\n    --vae V        VAE (default: flux2-vae.safetensors)",
         "animate":  "animate <image> \"<motion prompt>\" [options]\n\n  Animate a still image into a short video with LTX-2.3 (image-to-video).\n  Uploads the image, runs the bundled LTX-2.3 i2v graph, downloads the MP4.\n  Requires the LTX models on the DGX.\n\n  Options:\n    --seed N    Seed (default: random)\n    --out PATH  Local output path (default: ./<filename>.mp4)",
-        "pull-models": "pull-models [--set generate|animate|all]\n\n  Download the models the comfy commands need into ComfyUI's models dir on\n  the DGX, using the in-repo catalog (templates/comfy_models.json) and the\n  bundled hf_download.py. Resume-safe. All repos are public.\n\n  Options:\n    --set S   Which set to pull: generate (FLUX.2), animate (LTX-2.3), or all\n              (default: all)",
+        "pull-models": "pull-models [--set generate|animate|all]\n\n  Download the models the comfy commands need into ComfyUI's models dir on\n  the DGX, using the model catalog (templates/models.example.json, or\n  ~/.config/spark.models.json) and the bundled hf_download.py. Resume-safe,\n  public.\n\n  Options:\n    --set S   Which set to pull: generate (FLUX.2), animate (LTX-2.3), or all\n              (default: all)",
     }
     if not args or args[0] in ("-h", "--help"):
         print(cmd_comfy.__doc__)
@@ -1295,6 +1318,7 @@ def cmd_transcribe(args, cfg):
       stop                           Stop the running whisper-server
       status                         Show whisper-server state and endpoint
       logs [--lines N]               Tail the whisper-server log
+      pull-models [--model M|--all]  Download whisper ggml model(s)
 
     The server exposes an OpenAI-compatible transcription endpoint at:
       http://<dgx-host>:8081/v1/audio/transcriptions
@@ -1314,6 +1338,7 @@ def cmd_transcribe(args, cfg):
         "stop":   "stop              Stop the running whisper-server\n  No additional flags.",
         "status": "status            Show whisper-server state and endpoint URL\n  No additional flags.",
         "logs":   "logs [--lines N]  Tail the whisper-server log\n\n  Options:\n    --lines N   Lines to show before following (default: 20)",
+        "pull-models": "pull-models [--model <name>|--all]\n\n  Download whisper ggml model(s) from the catalog into the DGX's whisper\n  models dir, using the bundled hf_download.py. Public, resume-safe.\n\n  Options:\n    --model M   Which model (default: large-v3)\n    --all       Pull every model in the catalog",
     }
     if not args or args[0] in ("-h", "--help"):
         print(cmd_transcribe.__doc__)
@@ -1340,8 +1365,7 @@ def cmd_transcribe(args, cfg):
         model_file = ssh(cfg, f"find {models_dir} -name 'ggml-{model}.bin' 2>/dev/null | head -1")
         if not model_file:
             print(fail(f"Model ggml-{model}.bin not found in {models_dir}"))
-            print(f"  Download it on the DGX with:")
-            print(f"  {cyan(f'{models_dir}/download-ggml-model.sh {model}')}")
+            print(f"  Download it with: {cyan(f'spark transcribe pull-models --model {model}')}")
             sys.exit(1)
 
         existing = ssh(cfg, "pgrep whisper-server || true")
@@ -1403,10 +1427,40 @@ def cmd_transcribe(args, cfg):
         print(dim(f"Tailing whisper-server log — Ctrl+C to stop\n"))
         subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
                         f"tail -n {lines} -f {whisper_log}"])
+    elif sub == "pull-models":
+        _transcribe_pull_models(rest, cfg)
     else:
         print(red(f"Unknown transcribe subcommand: {sub}"))
         print(f"  Run {cyan('spark transcribe --help')} for usage.")
         sys.exit(1)
+
+
+def _transcribe_pull_models(args, cfg):
+    """Download whisper ggml models from the catalog into whisper_models_dir.
+
+    Pulls large-v3 by default; --model <name> picks one, --all grabs the set.
+    Replaces the dependency on whisper.cpp's own download-ggml-model.sh with the
+    repo's catalog + bundled downloader.
+    """
+    catalog, _ = _models_catalog()
+    models = catalog.get("whisper", {}).get("models", [])
+    names = [m["model"] for m in models]
+    pick = _flag_str(args, "--model", "large-v3")
+    grab_all = "--all" in args
+
+    if "--help" in args or "-h" in args or (not grab_all and pick not in names):
+        print("spark transcribe pull-models [--model <name>|--all]")
+        print(f"\n  Download whisper ggml model(s) into the DGX's whisper models dir.")
+        print(f"  Available: {', '.join(names)}  (default: large-v3)")
+        if not grab_all and pick not in names:
+            print(red(f"\n  Unknown --model '{pick}'"))
+        return
+
+    chosen = models if grab_all else [m for m in models if m["model"] == pick]
+    dest = cfg["whisper_models_dir"]
+    jobs = [{"repo": m["repo_id"], "dest": dest, "glob": m["glob"], "label": m["label"]}
+            for m in chosen]
+    _run_pull(cfg, jobs, done_hint=f"Start it with {cyan('spark transcribe start')}.")
 
 
 def cmd_llm(args, cfg):
@@ -1425,6 +1479,7 @@ def cmd_llm(args, cfg):
       stop                    Stop ALL llama-server instances at once
       logs [--port N]         Tail a server log
       open [--port N]         Open a model's built-in chat UI in browser
+      pull-models [<name>...]  Download catalog LLM model(s) (lists sizes if no args)
 
     Examples:
       spark llm serve <model> --quant Q5_K_M
@@ -1440,6 +1495,7 @@ def cmd_llm(args, cfg):
         "stop":   "stop\n\n  Stop ALL llama-server / vLLM instances at once and free their memory.\n  Use 'unload' to stop just one. Does not affect whisper or ComfyUI.",
         "logs":   "logs [--port N] [--lines N]\n\n  Options:\n    --port N    Which server's log to tail (default: the only one loaded)\n    --lines N   Lines to show before following (default: 20)",
         "open":   "open [--port N]\n\n  Open a model's built-in llama-server chat UI in your browser.\n  With several loaded, pass --port to choose one.",
+        "pull-models": "pull-models [<name> ...] [--all]\n\n  Download LLM model(s) from the catalog (the `llm` section of\n  ~/.config/spark.models.json, else the repo example) into models_dir/<name>.\n  Run with no args to list the catalog with sizes; these models are large,\n  so it never bulk-pulls without explicit names or --all.\n\n  Options:\n    <name> ...   One or more catalog model names to pull\n    --all        Pull every model in the catalog",
     }
 
     if not args or args[0] in ("-h", "--help"):
@@ -1483,10 +1539,53 @@ def cmd_llm(args, cfg):
         url = f"http://{cfg['dgx_host']}:{port}"
         print(f"Opening {cyan(url)}")
         webbrowser.open(url)
+    elif sub == "pull-models":
+        _llm_pull_models(rest, cfg)
     else:
         print(red(f"Unknown llm subcommand: {sub}"))
         print(f"  Run {cyan('spark llm --help')} for usage.")
         sys.exit(1)
+
+
+def _llm_pull_models(args, cfg):
+    """Download catalog LLM model(s) into models_dir, one dir per model.
+
+    The catalog's `llm` section lists models validated for the GB10 (large MoE
+    models that fit the 128 GB UMA, in Unsloth Dynamic quants). These run large —
+    so this never bulk-pulls by default: it lists the catalog with sizes and
+    requires explicit model names or --all. Each model lands in models_dir/<name>,
+    addressable by `spark llm serve <name>`. Copy templates/models.example.json to
+    ~/.config/spark.models.json to customize.
+    """
+    catalog, src = _models_catalog()
+    models = catalog.get("llm", {}).get("models", [])
+    names = [m["name"] for m in models]
+    grab_all = "--all" in args
+    picks = [a for a in args if not a.startswith("-")]
+    unknown = [p for p in picks if p not in names]
+
+    if "--help" in args or "-h" in args or not models or unknown or (not grab_all and not picks):
+        print("spark llm pull-models [<name> ...] [--all]")
+        print(f"\n  Download LLM model(s) from the catalog into models_dir/<name>.")
+        print(f"  Source: {dim(str(src))}")
+        if src.name == "models.example.json":
+            print(dim("  (repo example — copy to ~/.config/spark.models.json to customize)"))
+        print()
+        for m in models:
+            print(f"    {cyan(m['name'])}   {dim(m['label'])}")
+            if m.get("why"):
+                print(f"        {dim(m['why'])}")
+        if names:
+            print(f"\n  Pull one or more: {cyan('spark llm pull-models ' + names[0])}")
+            print(f"  Pull everything:  {cyan('spark llm pull-models --all')}  {dim('(these are large — mind the sizes)')}")
+        if unknown:
+            print(red(f"\n  Unknown model(s): {', '.join(unknown)}"))
+        return
+
+    chosen = models if grab_all else [m for m in models if m["name"] in picks]
+    jobs = [{"repo": m["repo_id"], "dest": f"{cfg['models_dir']}/{m['name']}",
+             "glob": m["glob"], "label": m["label"], "flat": m.get("flat", False)} for m in chosen]
+    _run_pull(cfg, jobs, done_hint=f"List them with {cyan('spark models')}, then {cyan('spark llm serve <name>')}.")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
