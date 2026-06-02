@@ -14,3 +14,15 @@ __pycache__/
 .claude/.sandbox-exit-code
 .claude/.sandbox-status.json
 .codex/.sandbox-status.json
+
+# Sensitive-file guards — prevent accidental commit of secrets
+*.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+*.keystore
+secrets/
+credentials/
+config.local.*
