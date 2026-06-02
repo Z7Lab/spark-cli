@@ -50,9 +50,13 @@ def get_file_size(url, token):
         return 0
 
 
-def download_file(repo_id, filename, local_dir, token):
+def download_file(repo_id, filename, local_dir, token, flat=False):
     url = f'https://huggingface.co/{repo_id}/resolve/main/{filename}'
-    dest = Path(local_dir) / filename
+    # Default preserves the repo's path under local_dir. --flat drops the repo
+    # subdirs and writes the file directly as local_dir/<basename> — needed when
+    # a repo nests files (e.g. split_files/<type>/<file>) but the target layout
+    # is flat (e.g. ComfyUI's models/<type>/<file>).
+    dest = Path(local_dir) / (Path(filename).name if flat else filename)
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp = dest.with_suffix('.tmp')
 
@@ -112,12 +116,14 @@ def download_file(repo_id, filename, local_dir, token):
 
 
 def usage():
-    print('Usage: python3 hf-download.py <repo_id> <local_dir> <pattern>')
+    print('Usage: python3 hf-download.py <repo_id> <local_dir> <pattern> [--flat]')
     print()
     print('Arguments:')
     print('  repo_id     HuggingFace repo  (e.g. <org>/<model>-GGUF)')
     print('  local_dir   Local destination directory')
     print('  pattern     Glob pattern to match filenames  (e.g. "*Q4_K_XL*")')
+    print('  --flat      Write matched files directly as local_dir/<basename>,')
+    print('              dropping repo subdirs (e.g. split_files/<type>/).')
     print()
     print('Examples:')
     print('  python3 hf-download.py <org>/<model>-GGUF ~/models/<name> "*Q4_K_XL*"')
@@ -127,11 +133,16 @@ def usage():
 
 
 def main():
-    if len(sys.argv) < 4 or sys.argv[1] in ('-h', '--help'):
+    argv = sys.argv[1:]
+    flat = False
+    if '--flat' in argv:
+        flat = True
+        argv = [a for a in argv if a != '--flat']
+    if len(argv) < 3 or argv[0] in ('-h', '--help'):
         usage()
         sys.exit(0 if '--help' in sys.argv else 1)
 
-    repo_id, local_dir, pattern = sys.argv[1], sys.argv[2], sys.argv[3]
+    repo_id, local_dir, pattern = argv[0], argv[1], argv[2]
     token = get_token()
 
     print(f'Fetching file list: {repo_id}  (pattern: {pattern})')
@@ -147,7 +158,7 @@ def main():
     print()
 
     for f in files:
-        download_file(repo_id, f, local_dir, token)
+        download_file(repo_id, f, local_dir, token, flat=flat)
 
     print('\nDone.')
 

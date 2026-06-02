@@ -1,0 +1,49 @@
+{
+  "_comment": "Model catalog for the `spark comfy` commands. Each entry is pulled with bin/hf_download.py --flat into <comfy_dir>/workspace/models/<subdir>/<basename>, which is ComfyUI's expected flat layout. Driven by `spark comfy pull-models`. All repos are public (no token needed).",
+  "generate": [
+    {
+      "repo_id": "Comfy-Org/flux2-dev",
+      "glob": "flux2_dev_fp8mixed.safetensors",
+      "subdir": "diffusion_models",
+      "label": "FLUX.2 Dev DiT (fp8 mixed)"
+    },
+    {
+      "repo_id": "Comfy-Org/flux2-dev",
+      "glob": "flux2-vae.safetensors",
+      "subdir": "vae",
+      "label": "FLUX.2 VAE"
+    },
+    {
+      "repo_id": "Comfy-Org/flux2-dev",
+      "glob": "mistral_3_small_flux2_bf16.safetensors",
+      "subdir": "text_encoders",
+      "label": "FLUX.2 Mistral-3 Small text encoder (BF16)"
+    }
+  ],
+  "animate": [
+    {
+      "repo_id": "Lightricks/LTX-2.3-fp8",
+      "glob": "ltx-2.3-22b-dev-fp8.safetensors",
+      "subdir": "checkpoints",
+      "label": "LTX-2.3 22B Dev FP8 checkpoint"
+    },
+    {
+      "repo_id": "Comfy-Org/ltx-2",
+      "glob": "gemma_3_12B_it_fp4_mixed.safetensors",
+      "subdir": "text_encoders",
+      "label": "Gemma-3 12B IT text encoder (NVFP4 mixed)"
+    },
+    {
+      "repo_id": "Lightricks/LTX-2.3",
+      "glob": "ltx-2.3-22b-distilled-lora-384.safetensors",
+      "subdir": "loras",
+      "label": "LTX-2.3 distilled LoRA-384"
+    },
+    {
+      "repo_id": "Lightricks/LTX-2.3",
+      "glob": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors",
+      "subdir": "latent_upscale_models",
+      "label": "LTX-2.3 spatial upscaler x2 v1.1"
+    }
+  ]
+}

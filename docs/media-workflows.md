@@ -133,15 +133,31 @@ and the `-10` subgraph-input origin).
 
 ## Models
 
-| Command | Models (on the DGX, under `/opt/spark/comfyui/workspace/models/`) |
-|---|---|
-| `generate` (FLUX.2) | `diffusion_models/flux2_dev_fp8mixed` · `vae/flux2-vae` · `text_encoders/mistral_3_small_flux2_bf16` |
-| `animate` (LTX-2.3 i2v) | `checkpoints/ltx-2.3-22b-dev-fp8` · `text_encoders/gemma_3_12B_it_fp4_mixed` · `loras/ltx-2.3-22b-distilled-lora-384` · `latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1` |
+The catalog the comfy commands need ships in the repo as
+[`templates/comfy_models.json`](../templates/comfy_models.json) (repo id · file
+glob · destination subdir under `models/`). Pull it onto the DGX with one command:
 
-Pull any model with our resume-safe downloader (verifies completeness):
 ```bash
-ssh svc-spark@<host> 'python3 /opt/spark/bin/hf_download.py <repo_id> <dest_dir> "<glob>"'
+spark comfy pull-models                 # everything (generate + animate)
+spark comfy pull-models --set generate  # just the FLUX.2 set
+spark comfy pull-models --set animate   # just the LTX-2.3 set
 ```
-The AEON-Spark `download_models.py` (located on the DGX, not in this repo) lists the
-full model catalog with HuggingFace repo IDs, destination subdirectories under
-`/opt/spark/comfyui/workspace/models/`, and the file globs for each model.
+
+`pull-models` syncs the bundled [`bin/hf_download.py`](../bin/hf_download.py) to the
+DGX and runs it (resume-safe, verifies completeness, `--flat` lands each file in
+ComfyUI's `models/<type>/` layout) over every catalog entry. All repos are public —
+no token required.
+
+| Command | repo id | → `models/<subdir>/<file>` |
+|---|---|---|
+| `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `diffusion_models/flux2_dev_fp8mixed.safetensors` |
+| `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `vae/flux2-vae.safetensors` |
+| `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `text_encoders/mistral_3_small_flux2_bf16.safetensors` |
+| `animate` (LTX-2.3) | `Lightricks/LTX-2.3-fp8` | `checkpoints/ltx-2.3-22b-dev-fp8.safetensors` |
+| `animate` (LTX-2.3) | `Comfy-Org/ltx-2` | `text_encoders/gemma_3_12B_it_fp4_mixed.safetensors` |
+| `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `loras/ltx-2.3-22b-distilled-lora-384.safetensors` |
+| `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `latent_upscale_models/ltx-2.3-spatial-upscaler-x2-1.1.safetensors` |
+
+To add a model, append an entry to `templates/comfy_models.json` — no code change.
+For a one-off pull outside the catalog, call the downloader directly:
+`ssh <user>@<host> 'python3 <hf_dl> <repo_id> <dest_dir> "<glob>" --flat'`.

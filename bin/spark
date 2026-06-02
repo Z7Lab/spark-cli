@@ -1088,6 +1088,62 @@ def _comfy_animate(args, cfg):
     print(f"  On DGX: {dim(cfg['comfy_dir'] + '/workspace/output/' + vid['filename'])}")
 
 
+def _comfy_pull_models(args, cfg):
+    """Download the models the comfy commands need, using bin/hf_download.py.
+
+    Reads the in-repo catalog (templates/comfy_models.json) and pulls each entry
+    onto the DGX at <comfy_dir>/workspace/models/<subdir>/<file> (ComfyUI's flat
+    layout, via hf_download.py --flat). Lets a fresh checkout reproduce the exact
+    model set with our own tooling — no DGX-only catalog required.
+    """
+    valid = ("generate", "animate", "all")
+    which = _flag(args, "--set", "all")
+    if "--help" in args or "-h" in args or which not in valid:
+        print("spark comfy pull-models [--set generate|animate|all]")
+        print("\n  Download the FLUX.2 (generate) and/or LTX-2.3 (animate) models")
+        print("  the comfy commands need, into ComfyUI's models dir on the DGX.")
+        if which not in valid:
+            print(red(f"\n  Invalid --set '{which}' (use: {', '.join(valid[:-1])}, all)"))
+        return
+
+    manifest = Path(__file__).resolve().parent.parent / "templates" / "comfy_models.json"
+    catalog = json.loads(manifest.read_text())
+    sets = ["generate", "animate"] if which == "all" else [which]
+    entries = [e for s in sets for e in catalog.get(s, [])]
+
+    # pull-models relies on hf_download.py --flat to land files in ComfyUI's flat
+    # models/<type>/ layout. A stale engine on the DGX silently ignores --flat and
+    # re-downloads into nested split_files/ dirs — so sync the in-repo engine first.
+    local_engine = Path(__file__).resolve().parent / "hf_download.py"
+    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{cfg['hf_dl']}"))
+    sync = subprocess.run(["scp", "-q", str(local_engine),
+                           f"{cfg['dgx_user']}@{cfg['dgx_host']}:{cfg['hf_dl']}"]).returncode
+    if sync != 0:
+        print(fail(f"Could not deploy {local_engine.name} to the DGX (scp exit {sync})."))
+        sys.exit(sync)
+
+    models_root = f"{cfg['comfy_dir']}/workspace/models"
+    print(bold(f"Pulling {len(entries)} model(s) for: {', '.join(sets)}\n"))
+    for i, e in enumerate(entries, 1):
+        dest = f"{models_root}/{e['subdir']}"
+        print(f"  {bold(str(i))}/{len(entries)}  {cyan(e['label'])}")
+        print(f"     {dim(e['repo_id'])} → {dim(e['subdir'] + '/' + e['glob'])}")
+    print()
+
+    n = len(entries)
+    chain = " && ".join(
+        f"echo '[{i}/{n}] {e['label']}' && "
+        f"python3 {cfg['hf_dl']} {e['repo_id']} {models_root}/{e['subdir']} '{e['glob']}' --flat"
+        for i, e in enumerate(entries, 1)
+    )
+    rc = subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}", chain]).returncode
+    if rc == 0:
+        print(ok(f"\nDone. Verify with {cyan('spark comfy status')} and re-run a gen."))
+    else:
+        print(fail(f"\nPull exited with status {rc} — re-run to resume (downloads are resume-safe)."))
+        sys.exit(rc)
+
+
 def cmd_comfy(args, cfg):
     """Manage the ComfyUI image/video generation server (AEON-Spark).
 
@@ -1100,6 +1156,7 @@ def cmd_comfy(args, cfg):
       logs [--lines N]   Tail the ComfyUI container logs
       generate "<prompt>"          Generate a FLUX.2 image, download the PNG
       animate <image> "<prompt>"   Animate a still into a video (LTX-2.3 i2v)
+      pull-models [--set S]        Download the models generate/animate need
 
     Accesses ComfyUI at:
       http://<dgx-host>:8188
@@ -1121,6 +1178,7 @@ def cmd_comfy(args, cfg):
         "logs":   "logs [--lines N]  Tail the ComfyUI container logs\n\n  Options:\n    --lines N   Lines to show before following (default: 50)",
         "generate": "generate \"<prompt>\" [options]\n\n  Generate a FLUX.2 text-to-image render and download the PNG locally.\n\n  Options:\n    --width N      Image width  (default: 1024)\n    --height N     Image height (default: 1024)\n    --steps N      Sampling steps (default: 20)\n    --guidance G   FLUX guidance (default: 3.5)\n    --seed N       Seed (default: random)\n    --out PATH     Local output path (default: ./<filename>.png)\n    --model M      Diffusion model (default: flux2_dev_fp8mixed.safetensors)\n    --encoder E    Text encoder (default: mistral_3_small_flux2_bf16.safetensors)\n    --vae V        VAE (default: flux2-vae.safetensors)",
         "animate":  "animate <image> \"<motion prompt>\" [options]\n\n  Animate a still image into a short video with LTX-2.3 (image-to-video).\n  Uploads the image, runs the bundled LTX-2.3 i2v graph, downloads the MP4.\n  Requires the LTX models on the DGX.\n\n  Options:\n    --seed N    Seed (default: random)\n    --out PATH  Local output path (default: ./<filename>.mp4)",
+        "pull-models": "pull-models [--set generate|animate|all]\n\n  Download the models the comfy commands need into ComfyUI's models dir on\n  the DGX, using the in-repo catalog (templates/comfy_models.json) and the\n  bundled hf_download.py. Resume-safe. All repos are public.\n\n  Options:\n    --set S   Which set to pull: generate (FLUX.2), animate (LTX-2.3), or all\n              (default: all)",
     }
     if not args or args[0] in ("-h", "--help"):
         print(cmd_comfy.__doc__)
@@ -1219,6 +1277,8 @@ def cmd_comfy(args, cfg):
         _comfy_generate(rest, cfg)
     elif sub == "animate":
         _comfy_animate(rest, cfg)
+    elif sub == "pull-models":
+        _comfy_pull_models(rest, cfg)
     else:
         print(red(f"Unknown comfy subcommand: {sub}"))
         print(f"  Run {cyan('spark comfy --help')} for usage.")

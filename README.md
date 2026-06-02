@@ -38,6 +38,9 @@ spark llm open [--port N]                         Open built-in chat UI in brows
 
 # Image / video generation
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
+spark comfy generate "<prompt>"                   FLUX.2 text-to-image, downloads the PNG
+spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
+spark comfy pull-models [--set generate|animate|all]  Download the models those commands need
 
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
@@ -108,6 +111,11 @@ spark comfy logs
 ```
 
 UI at: `http://gx10-<id>.local:8188`
+
+**First, the models** — `spark comfy pull-models` downloads everything `generate`
+and `animate` need (from the in-repo catalog `templates/comfy_models.json`, via the
+bundled downloader) into ComfyUI's models dir on the DGX. `--set generate` or
+`--set animate` pulls just one. Resume-safe; all repos are public.
 
 **Generate from the CLI** — `spark comfy generate` submits a FLUX.2 text-to-image
 job to the ComfyUI API and downloads the PNG to your workstation:
