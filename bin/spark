@@ -1693,6 +1693,376 @@ def _flag(args: list, name: str, default):
     except (ValueError, IndexError):
         return default
 
+# ── Playbooks ─────────────────────────────────────────────────────────────────
+#
+# A playbook is a self-describing task flow an agent can discover and walk: a fenced
+# ```spec JSON block (machine-truth — typed inputs, steps, preconditions) plus
+# markdown "## <step-id>" pages (agent-facing guidance). Versioned flows ship in the
+# repo's playbooks/ dir; personal flows live git-ignored in ~/.config/spark/playbooks/
+# and override shipped ones by name. spark stays stateless — `run` evaluates one step
+# (and its precondition) at a time; the agent holds position + answers.
+
+import re as _re
+
+PLAYBOOK_REPO_DIR = Path(__file__).resolve().parent.parent / "playbooks"
+PLAYBOOK_USER_DIR = Path.home() / ".config" / "spark" / "playbooks"
+
+
+def _parse_playbook(path: Path):
+    text = path.read_text()
+    m = _re.search(r"```(?:spec|json)\s*\n(.*?)\n```", text, _re.S)
+    if not m:
+        raise ValueError(f"{path.name}: missing ```spec JSON block")
+    spec = json.loads(m.group(1))
+    pages = {}
+    for sm in _re.finditer(r"(?ms)^##\s+([^\n]+)\n(.*?)(?=^##\s|\Z)", text[m.end():]):
+        pages[sm.group(1).strip()] = sm.group(2).strip()
+    return spec, pages
+
+
+def _playbook_sources() -> dict:
+    """name -> (path, personal). Personal (user dir) overrides shipped by name."""
+    found = {}
+    for d, personal in ((PLAYBOOK_REPO_DIR, False), (PLAYBOOK_USER_DIR, True)):
+        if d.is_dir():
+            for f in sorted(d.glob("*.md")):
+                if f.name == "playbook.example.md":
+                    continue
+                found[f.stem] = (f, personal)
+    return found
+
+
+def _resolve_template(template: str, values: dict) -> str:
+    """Fill {placeholders} from values; raise naming the first missing one."""
+    out = template
+    for key in _re.findall(r"\{([a-zA-Z0-9_]+)\}", template):
+        if key not in values or values[key] in (None, ""):
+            raise KeyError(key)
+        out = out.replace("{" + key + "}", str(values[key]))
+    return out
+
+
+def _probe(cfg, pre: dict, values: dict):
+    """Run a precondition probe; return (ready: bool, output: str)."""
+    cmd = _resolve_template(pre["probe"], values)
+    if pre.get("where", "remote") == "local":
+        out = subprocess.run(cmd, shell=True, capture_output=True, text=True).stdout.strip()
+    else:
+        out = ssh(cfg, cmd)
+    ready_if = pre.get("ready_if", "nonempty")
+    ready = bool(out) if ready_if == "nonempty" else (ready_if in out)
+    return ready, out
+
+
+def _merged_inputs(spec: dict, answers: dict) -> dict:
+    vals = {k: v.get("default") for k, v in spec.get("inputs", {}).items()}
+    vals.update({k: v for k, v in answers.items() if v is not None})
+    return vals
+
+
+def cmd_playbook(args, cfg):
+    """Discover and walk self-describing task flows.
+
+    Usage: spark playbook <list|show|run|check> [name] [options]
+
+    Subcommands:
+      list                 All playbooks (shipped + personal), with descriptions
+      show <name>          Static blueprint: required inputs + the step map
+      run <name> [opts]    Walk the flow one step at a time (precondition-gated)
+      check <name>         Lint a playbook's spec, steps, and pages
+
+    Playbooks merge shipped flows (repo playbooks/) with personal ones
+    (~/.config/spark/playbooks/, which override by name). Run walks the agent:
+    pass inputs as --key val (or --answers '{json}'), and --step <id> to advance.
+
+    Examples:
+      spark playbook list
+      spark playbook show transcribe-audio
+      spark playbook run transcribe-audio --model large-v3
+      spark playbook run transcribe-audio --step start --model large-v3
+    """
+    if not args or args[0] in ("-h", "--help"):
+        print(cmd_playbook.__doc__)
+        return
+    sub, rest = args[0], args[1:]
+
+    if sub == "list":
+        src = _playbook_sources()
+        if not src:
+            print(dim("No playbooks found.")
+                  + f"  Shipped: {PLAYBOOK_REPO_DIR}  Personal: {PLAYBOOK_USER_DIR}")
+            return
+        print(bold("Playbooks"))
+        col = max(len(n) for n in src) + 2
+        for name in sorted(src):
+            path, personal = src[name]
+            try:
+                spec, _ = _parse_playbook(path)
+                desc = spec.get("description", "")
+            except Exception as e:
+                desc = red(f"(unparseable: {e})")
+            tag = dim(" [personal]") if personal else ""
+            print(f"  {cyan(name):<{col + 9}} {desc}{tag}")
+        print(dim(f"\n  show <name> for inputs · run <name> to walk it"))
+        return
+
+    if not rest or rest[0].startswith("-"):
+        print(red(f"playbook {sub} needs a <name>.")); sys.exit(1)
+    name, opts = rest[0], rest[1:]
+    src = _playbook_sources()
+    if name not in src:
+        print(red(f"No playbook '{name}'. Run {cyan('spark playbook list')}.")); sys.exit(1)
+    path, personal = src[name]
+    spec, pages = _parse_playbook(path)
+    steps = spec.get("steps", [])
+    by_id = {s["id"]: s for s in steps}
+
+    if sub == "show":
+        print(bold(spec.get("name", name)) + (dim("  [personal]") if personal else ""))
+        print(f"  {spec.get('description','')}\n")
+        inputs = spec.get("inputs", {})
+        if inputs:
+            print(bold("Required inputs:"))
+            for k, v in inputs.items():
+                opt = f" [{('|').join(v['options'])}]" if v.get("options") else ""
+                dfl = f" (default {v['default']})" if "default" in v else ""
+                req = red(" required") if v.get("required") else ""
+                print(f"  {cyan(k)}  {v.get('type','string')}{opt}{dfl}{req}  {dim(v.get('description',''))}")
+            print()
+        reqs = spec.get("requires", [])
+        if reqs:
+            print(bold("Requires:"))
+            for r in reqs:
+                where = f" ({r['where']})" if r.get("where") else ""
+                hint = dim("  " + r["hint"]) if r.get("hint") else ""
+                print(f"  {cyan(r['what'])}{dim(where)}{hint}")
+            print()
+        print(bold("Steps:"))
+        for s in steps:
+            cmdt = dim("  → " + s["command"]) if s.get("command") else ""
+            print(f"  {cyan(s['id'])}  {s.get('title','')}{cmdt}")
+        print(dim(f"\n  Walk it: spark playbook run {name} [--<input> val ...]"))
+        return
+
+    if sub == "check":
+        problems = []
+        if "name" not in spec: problems.append("spec missing 'name'")
+        if not steps: problems.append("spec has no steps")
+        valid_keys = set(spec.get("inputs", {})) | set(_DEFAULTS)
+        for r in spec.get("requires", []):
+            if "what" not in r:
+                problems.append("a requires entry is missing 'what'")
+            for ph in _re.findall(r"\{([a-zA-Z0-9_]+)\}", r.get("probe", "")):
+                if ph not in valid_keys:
+                    problems.append(f"requires '{r.get('what','?')}' probe references unknown '{{{ph}}}'")
+        ids = set(by_id)
+        for s in steps:
+            if "id" not in s: problems.append("a step is missing 'id'"); continue
+            nxt = s.get("next")
+            if nxt and nxt not in ids and nxt != "DONE":
+                problems.append(f"step '{s['id']}' -> unknown next '{nxt}'")
+            if s["id"] not in pages:
+                problems.append(f"step '{s['id']}' has no '## {s['id']}' page")
+            for tmpl in (s.get("command", ""), (s.get("precondition") or {}).get("probe", ""),
+                         s.get("remedy", "")):
+                for ph in _re.findall(r"\{([a-zA-Z0-9_]+)\}", tmpl):
+                    if ph not in valid_keys:
+                        problems.append(f"step '{s['id']}' references unknown placeholder '{{{ph}}}'")
+        if problems:
+            print(fail(f"{name}: {len(problems)} issue(s):"))
+            for p in problems: print(f"  - {p}")
+            sys.exit(1)
+        print(ok(f"{name}: spec, {len(steps)} steps, and pages all valid."))
+        return
+
+    if sub == "run":
+        # parse --step / --answers / --key val
+        step_id, answers = None, {}
+        i = 0
+        while i < len(opts):
+            a = opts[i]
+            if a == "--step":
+                step_id = opts[i + 1]; i += 2; continue
+            if a == "--answers":
+                answers.update(json.loads(opts[i + 1])); i += 2; continue
+            if a.startswith("--"):
+                k = a[2:]
+                if i + 1 < len(opts) and not opts[i + 1].startswith("--"):
+                    answers[k] = opts[i + 1]; i += 2
+                else:
+                    answers[k] = "true"; i += 1
+                continue
+            i += 1
+        # config keys are available to probe/command templates ({whisper_models_dir},
+        # {models_dir}, {comfy_dir}, …); playbook inputs override on name collision.
+        values = {**cfg, **_merged_inputs(spec, answers)}
+
+        if step_id is None:
+            # entry: show inputs, then start at the first step
+            print(bold(f"Playbook: {spec.get('name', name)}") + dim(f"  ({path.name})"))
+            print(f"  {spec.get('description','')}")
+            missing = [k for k, v in spec.get("inputs", {}).items()
+                       if v.get("required") and not values.get(k)]
+            if missing:
+                print(warn(f"  Provide required inputs: {', '.join('--' + m for m in missing)}"))
+            reqs = spec.get("requires", [])
+            if reqs:
+                print(bold("  Requirements:"))
+                for r in reqs:
+                    ready = None
+                    if r.get("probe"):
+                        try:
+                            ready, _ = _probe(cfg, r, values)
+                        except KeyError:
+                            ready = None
+                    if ready:
+                        print(f"    {ok(r['what'])}")
+                    elif ready is False:
+                        extra = dim(f"  → {r['hint']}") if r.get("hint") else ""
+                        print(f"    {fail(r['what'])}{extra}")
+                    else:
+                        print(f"    {dim('? ' + r['what'])}")
+            step_id = steps[0]["id"]
+
+        if step_id not in by_id:
+            print(red(f"No step '{step_id}' in {name}.")); sys.exit(1)
+        step = by_id[step_id]
+        idx = [s["id"] for s in steps].index(step_id)
+        print(f"\n{bold(f'Step {idx + 1}/{len(steps)}: {step_id}')} — {step.get('title','')}")
+        if step_id in pages:
+            print(dim(pages[step_id]))
+
+        pre = step.get("precondition")
+        if pre:
+            try:
+                ready, out = _probe(cfg, pre, values)
+            except KeyError as e:
+                print(red(f"  precondition needs input {{{e.args[0]}}} — pass --{e.args[0]}")); sys.exit(1)
+            if not ready:
+                print(fail("  precondition not met"))
+                remedy = step.get("remedy")
+                if remedy:
+                    try:
+                        remedy = _resolve_template(remedy, values)
+                    except KeyError:
+                        pass
+                    print(f"  Remedy: {cyan(remedy)}")
+                print(dim(f"  Resolve it, then re-run: spark playbook run {name} --step {step_id} "
+                          + " ".join(f"--{k} {v}" for k, v in answers.items())))
+                sys.exit(2)
+            print(ok("  precondition met"))
+
+        cmd_t = step.get("command")
+        if cmd_t:
+            try:
+                resolved = _resolve_template(cmd_t, values)
+            except KeyError as e:
+                print(red(f"  step needs input {{{e.args[0]}}} — pass --{e.args[0]}")); sys.exit(1)
+            print(f"  {bold('Run:')} {cyan(resolved)}")
+
+        nxt = step.get("next")
+        if nxt and nxt != "DONE":
+            print(dim(f"  Next: spark playbook run {name} --step {nxt} "
+                      + " ".join(f"--{k} {v}" for k, v in answers.items())))
+        else:
+            print(ok("  ✓ playbook complete."))
+        return
+
+    print(red(f"Unknown playbook subcommand: {sub}")); sys.exit(1)
+
+
+# ── Image verbs (local, Pillow) ───────────────────────────────────────────────
+
+def _bbox(s: str):
+    return tuple(int(x) for x in s.split(","))
+
+
+def cmd_image(args, cfg):
+    """Deterministic local image-compositing verbs (requires Pillow).
+
+    Usage: spark image <verb> <image> [options]
+
+    Verbs:
+      detect-region <image> [--search-box x0,y0,x1,y1] [--threshold N] [--exclude-top N]
+                                            Print the bbox of the main object
+      extract-asset <image> --bbox x0,y0,x1,y1 --out a.png
+                                            Crop a sub-image (e.g. a badge)
+      move-region <image> --bbox x0,y0,x1,y1 --dy N [--dx N] [--bg auto|r,g,b]
+                                  [--clear-pad N] --out out.png
+                                            Relocate a region, bg-fill the source
+      overlay-centered <image> --assets a.png,b.png --y N [--scale F] [--gap N]
+                                  [--anchor-x N] --out out.png
+                                            Paste assets as a centered group
+
+    Coordinates are explicit and deterministic — find them by inspecting the image
+    (e.g. detect-region), then feed them in. Pixel-exact, no model involved.
+    """
+    if not args or args[0] in ("-h", "--help"):
+        print(cmd_image.__doc__); return
+    verb, rest = args[0], args[1:]
+    if not rest or rest[0].startswith("-"):
+        print(red(f"image {verb} needs an <image> path.")); sys.exit(1)
+    img_path, opts = rest[0], rest[1:]
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+        import imgops
+        from PIL import Image
+    except ImportError:
+        print(fail("spark image requires Pillow:  pip install Pillow")); sys.exit(1)
+
+    im = Image.open(Path(img_path).expanduser()).convert("RGB")
+    out = _flag_str(opts, "--out", None)
+
+    if verb == "detect-region":
+        sb = _flag_str(opts, "--search-box", None)
+        bbox = imgops.detect_region(
+            im, search_box=_bbox(sb) if sb else None,
+            threshold=int(_flag_str(opts, "--threshold", 26)),
+            exclude_top=int(_flag_str(opts, "--exclude-top", 0)))
+        if not bbox:
+            print(fail("No region detected — adjust --search-box/--threshold.")); sys.exit(1)
+        print(",".join(str(v) for v in bbox))
+        print(dim(f"  size {bbox[2]-bbox[0]}x{bbox[3]-bbox[1]}  (feed to move-region/extract-asset)"))
+        return
+
+    if verb == "extract-asset":
+        bbox = _bbox(_flag_str(opts, "--bbox", ""))
+        if not out:
+            print(red("extract-asset needs --out")); sys.exit(1)
+        imgops.extract_asset(im, bbox).save(out)
+        print(ok(f"Saved {cyan(out)}  {dim(f'({bbox[2]-bbox[0]}x{bbox[3]-bbox[1]})')}"))
+        return
+
+    if verb == "move-region":
+        bbox = _bbox(_flag_str(opts, "--bbox", ""))
+        bgs = _flag_str(opts, "--bg", "auto")
+        bg = None if bgs == "auto" else tuple(int(x) for x in bgs.split(","))
+        dx, dy = int(_flag_str(opts, "--dx", 0)), int(_flag_str(opts, "--dy", 0))
+        res = imgops.move_region(im, bbox, dx=dx, dy=dy, bg=bg,
+                                   clear_pad=int(_flag_str(opts, "--clear-pad", 0)))
+        if not out:
+            print(red("move-region needs --out")); sys.exit(1)
+        res.save(out)
+        print(ok(f"Saved {cyan(out)}  {dim(f'(moved dx={dx} dy={dy})')}"))
+        return
+
+    if verb == "overlay-centered":
+        assets = [Image.open(Path(p).expanduser()) for p in _flag_str(opts, "--assets", "").split(",") if p]
+        if not assets or not out:
+            print(red("overlay-centered needs --assets and --out")); sys.exit(1)
+        ax = _flag_str(opts, "--anchor-x", None)
+        y = int(_flag_str(opts, "--y", 0))
+        res = imgops.overlay_centered(
+            im, assets, y=y, scale=float(_flag_str(opts, "--scale", 1.0)),
+            gap=int(_flag_str(opts, "--gap", 24)),
+            anchor_x=int(ax) if ax is not None else None)
+        res.save(out)
+        print(ok(f"Saved {cyan(out)}  {dim(f'({len(assets)} asset(s) centered at y={y})')}"))
+        return
+
+    print(red(f"Unknown image verb: {verb}")); sys.exit(1)
+
+
 COMMANDS = {
     "init":       cmd_init,
     "status":     cmd_status,
@@ -1703,6 +2073,8 @@ COMMANDS = {
     "download":   cmd_download,
     "queue":      cmd_queue,
     "logs-dl":    cmd_logs_dl,
+    "playbook":   cmd_playbook,
+    "image":      cmd_image,
 }
 
 # ── Help ──────────────────────────────────────────────────────────────────────

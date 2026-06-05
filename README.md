@@ -27,6 +27,9 @@ spark init                                        First-time setup — create ~/
 spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM)
 spark models                                      List downloaded models with quant and size
 
+# Guided task flows (agent-friendly)
+spark playbook <list|show|run|check> [name]       Discover & walk self-describing task flows
+
 # LLM serving (one llama-server per model — several can run at once)
 spark llm serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
                                                   Load a model (refuses if it won't fit)
@@ -51,7 +54,38 @@ spark llm pull-models [<name>...|--all]           Download catalog LLM model(s) 
 spark download <repo> <name> <pattern>            Download a single model from HuggingFace
 spark queue <repo> <name> <pattern> [...]         Queue multiple downloads sequentially
 spark logs-dl                                     Tail the download queue log
+
+# Local image compositing (requires Pillow)
+spark image detect-region <img> [--search-box ...] Print the bbox of the main object
+spark image extract-asset <img> --bbox ... --out   Crop a sub-image
+spark image move-region <img> --bbox ... --dy N    Relocate a region, bg-fill the source
+spark image overlay-centered <img> --assets ...    Paste assets as a centered group
 ```
+
+## Playbooks (guided task flows)
+
+A **playbook** is a self-describing task flow an agent can discover and walk — so it
+knows what to ask you and what to run, instead of reverse-engineering `--help`.
+
+```bash
+spark playbook list                       # all flows (shipped + personal)
+spark playbook show audio-transcribe      # required inputs + the step map
+spark playbook run audio-transcribe --model large-v3   # walk it, one step at a time
+```
+
+`run` walks the flow a step at a time: **step 0 checks preconditions** (is the model
+downloaded? is ComfyUI up?) and, if something's missing, prints the install remedy
+rather than failing — then serves each step's command for the agent to run, plus the
+next step. spark stays stateless; the agent carries the answers.
+
+Playbooks are single files — a fenced ` ```spec ` JSON block (typed inputs +
+precondition-gated steps) plus `## <step-id>` markdown pages. They merge two sources:
+
+- **Shipped** (general) in [`playbooks/`](playbooks/): `audio-transcribe`,
+  `image-to-video`, `llm-serve`.
+- **Personal** (git-ignored) in `~/.config/spark/playbooks/` — your own recipes; these
+  override shipped ones by name. Copy [`playbooks/playbook.example.md`](playbooks/playbook.example.md)
+  to start. Validate with `spark playbook check <name>`.
 
 Models for each service are listed in an editable catalog,
 [`templates/models.example.json`](templates/models.example.json) (sections:
