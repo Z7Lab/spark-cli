@@ -1,0 +1,19 @@
+#!/usr/bin/env python3
+"""spark-mcp — MCP server exposing spark's manifest commands as tools.
+
+Thin entry point: every command spark already defines in commands/<domain>/<verb>.md
+is served as an MCP tool, reusing the same manifests, parser, handlers, and schema
+converter as the CLI (no second definition). stdio JSON-RPC, stdlib only.
+
+Run it directly, or point any MCP client at it, e.g. in an mcpServers config:
+    { "spark": { "command": "/path/to/spark/bin/spark-mcp" } }
+"""
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "lib"))
+
+import mcp
+
+if __name__ == "__main__":
+    mcp.serve()

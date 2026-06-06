@@ -87,6 +87,24 @@ precondition-gated steps) plus `## <step-id>` markdown pages. They merge two sou
   override shipped ones by name. Copy [`playbooks/playbook.example.md`](playbooks/playbook.example.md)
   to start. Validate with `spark playbook check <name>`.
 
+## MCP server
+
+[`bin/spark-mcp`](bin/spark-mcp) exposes every command as an MCP tool, so any MCP client
+can drive the Spark directly — not only via CLI-over-SSH. It
+reuses the **same** command manifests, parser, handlers, and schema converter as the CLI
+(no second definition): each tool is named `<domain>_<verb>` (e.g. `llm_serve`), its
+input schema is generated from the command's `params`, and a call runs the same handler
+and returns its output plus the structured `{action, …}` result. stdlib-only (hand-rolled
+stdio JSON-RPC).
+
+Point a client at it:
+
+```json
+{ "mcpServers": { "spark": { "command": "/path/to/spark/bin/spark-mcp" } } }
+```
+
+`spark _schema [name]` prints the same tool schemas for inspection.
+
 Models for each service are listed in an editable catalog,
 [`templates/models.example.json`](templates/models.example.json) (sections:
 `comfy`, `whisper`, `llm`). Copy it to `~/.config/spark.models.json` and edit to
@@ -269,7 +287,7 @@ same set, kept in one scannable place. Commands run **on the DGX** unless noted
 
 Key design choices — each is intentional, not accidental:
 
-- **Manifest-driven, single source of truth.** Every command is defined ONCE in a manifest under `commands/<domain>/<verb>.md` — a fenced ` ```spec ` JSON block (name, typed `params`, `handler` ref) plus a markdown help body. That one definition drives CLI routing, the three-level `--help` hierarchy, and MCP-ready tool schemas (`spark _schema`). `bin/spark` is a thin entry point: it loads manifests, routes argv, parses it against the matched spec (`lib/cliparse.py`), and calls the handler (`lib/handlers/<domain>.py`). argv is interpreted in exactly one place, and the `handler(params, cfg)` contract is callable identically from the CLI and a future MCP server. Commands and playbooks share the same file shape and parser.
+- **Manifest-driven, single source of truth.** Every command is defined ONCE in a manifest under `commands/<domain>/<verb>.md` — a fenced ` ```spec ` JSON block (name, typed `params`, `handler` ref) plus a markdown help body. That one definition drives CLI routing, the three-level `--help` hierarchy, and MCP-ready tool schemas (`spark _schema`). `bin/spark` is a thin entry point: it loads manifests, routes argv, parses it against the matched spec (`lib/cliparse.py`), and calls the handler (`lib/handlers/<domain>.py`). argv is interpreted in exactly one place, and the `handler(params, cfg)` contract is callable identically from the CLI and the MCP server ([`bin/spark-mcp`](bin/spark-mcp)). Commands and playbooks share the same file shape and parser.
 - **SSH-based remote management.** Every command shells out to `ssh user@host '...'`. No agent runs on the DGX; the DGX is managed like a remote host, not a peer.
 - **One `llama-server` process per model.** Each loaded model gets its own port. This makes unloading precise (kill one process, free exactly that model's VRAM), avoids a multiplexing router, and keeps port numbers as stable identifiers (`--port 30000` always means that one model).
 - **`screen` sessions for process persistence.** `llama-server` and `whisper-server` run in detached `screen` sessions so they outlive the SSH connection that started them.
