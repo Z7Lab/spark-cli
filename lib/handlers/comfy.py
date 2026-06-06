@@ -104,6 +104,34 @@ def status(params, cfg):
     return result
 
 
+def queue(params, cfg):
+    """Show ComfyUI's render queue (running + pending prompts)."""
+    port = cfg["comfy_port"]
+    raw = ssh(cfg, f"curl -sf http://localhost:{port}/queue 2>/dev/null || true")
+    try:
+        data = json.loads(raw) if raw.strip() else {}
+    except (ValueError, AttributeError):
+        data = None
+    if data is None:
+        print(warn("ComfyUI did not return a queue — is it running? "
+                   f"Check: {cyan('spark comfy status')}"))
+        return {"action": "comfy.queue", "port": port, "reachable": False,
+                "running": [], "pending": []}
+    running = [r[1] for r in data.get("queue_running", []) if len(r) > 1]
+    pending = [r[1] for r in data.get("queue_pending", []) if len(r) > 1]
+    if running:
+        print(f"  running   {ok(str(len(running)))}")
+        for pid in running:
+            print(f"    {dim(pid)}")
+    else:
+        print(f"  running   {dim('idle')}")
+    print(f"  pending   {ok(str(len(pending))) if pending else dim('0')}")
+    for pid in pending:
+        print(f"    {dim(pid)}")
+    return {"action": "comfy.queue", "port": port, "reachable": True,
+            "running": running, "pending": pending}
+
+
 def logs(params, cfg):
     """Tail the ComfyUI container logs."""
     compose_dir = cfg["comfy_dir"]
@@ -420,6 +448,7 @@ HANDLERS = {
     "comfy.start":       start,
     "comfy.stop":        stop,
     "comfy.status":      status,
+    "comfy.queue":       queue,
     "comfy.logs":        logs,
     "comfy.generate":    generate,
     "comfy.animate":     animate,

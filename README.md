@@ -171,6 +171,7 @@ AEON-Spark — pre-built Docker image for GB10 (handles sm_121 / UMA / Blackwell
 ```bash
 spark comfy start     # pulls and starts via docker compose
 spark comfy status    # shows UI URL when ready
+spark comfy queue     # running + pending render jobs (what's rendering now)
 spark comfy stop
 spark comfy logs
 ```

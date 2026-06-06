@@ -70,7 +70,10 @@ done
 # or as a base for small prompt tweaks (keep the seed, change a few words).
 ```
 
-Each take is ~2 min, so a 3-seed sweep is ~6 min. Tips: change *one* thing at a time
+Each take is ~2 min, so a 3-seed sweep is ~6 min. To see what's actually rendering
+mid-sweep — instead of guessing — `spark comfy queue` lists the running and pending
+jobs straight from ComfyUI's queue (the authoritative source, unlike `comfy status`,
+which only reports that the container is up). Tips: change *one* thing at a time
 (seed **or** a prompt phrase, not both) so you can tell what helped; once a seed
 gives good motion, iterate the prompt on that fixed seed to refine details.
 
