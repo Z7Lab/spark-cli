@@ -22,61 +22,59 @@ from pathlib import Path
 
 CONFIG_PATH = Path.home() / ".config" / "spark.json"
 
-_DEFAULTS = {
-    "dgx_host":           "gx10-<id>.local",   # placeholder — set yours via `spark init` / config
-    "dgx_user":           "your-user",  # placeholder
-    "models_dir":         "~/models",
-    "server_bin":         "~/llama.cpp/build/bin/llama-server",
-    "server_log":         "~/llama-server.log",
-    "venv":               "~/llama-cpp-venv",
-    "hf_dl":              "~/hf_download.py",
-    "port":               30000,
-    # Memory headroom (GB) kept free when the serve fit-check decides whether a
-    # model will load — covers the OS, page cache, and co-running services on top
-    # of the model's weights + estimated KV cache.
-    "mem_reserve_gb":     8,
-    # Service asset paths — configurable so the whole stack can be relocated
-    # (e.g. consolidated under a single svc-spark-owned /opt/spark tree) without
-    # touching CLI code. Override per key via the env vars below or spark.json.
-    "comfy_dir":          "~/comfyui-aeon-spark",
-    "whisper_bin":        "~/whisper.cpp/build/bin/whisper-server",
-    "whisper_log":        "~/whisper-server.log",
-    "whisper_models_dir": "~/whisper.cpp/models",
-    "download_log":       "~/models/download.log",
-    # When the container stack runs under rootless Docker (as the svc-spark
-    # service account), the daemon listens on the user's XDG runtime socket, not
-    # the system socket — set true so docker commands over SSH target it.
-    "docker_rootless":    False,
-}
+# ── Config schema — the single source of truth ───────────────────────────────────
+#
+# One row per setting: key, default, env var, type, help, and whether `spark init`
+# prompts for it. EVERYTHING else derives from this list — the runtime defaults, the
+# env-var overrides, `spark config`, the generated `templates/spark.json.example`, and
+# `spark init`. Add a setting here and nowhere else.
+_CONFIG = [
+    {"key": "dgx_host",     "default": "gx10-<id>.local",                        "env": "DGX_HOST",                 "type": "str",  "init": True,  "help": "DGX hostname or IP (mDNS .local, or an IP)"},
+    {"key": "dgx_user",     "default": "your-user",                              "env": "DGX_USER",                 "type": "str",  "init": True,  "help": "SSH username on the DGX"},
+    {"key": "models_dir",   "default": "~/models",                               "env": "SPARK_MODELS_DIR",         "type": "str",  "init": True,  "help": "LLM models directory on the DGX"},
+    {"key": "server_bin",   "default": "~/llama.cpp/build/bin/llama-server",     "env": "SPARK_SERVER_BIN",         "type": "str",  "init": True,  "help": "llama-server binary path"},
+    {"key": "server_log",   "default": "~/llama-server.log",                     "env": "SPARK_SERVER_LOG",         "type": "str",  "init": True,  "help": "llama-server log file path"},
+    {"key": "venv",         "default": "~/llama-cpp-venv",                       "env": "SPARK_VENV",               "type": "str",  "init": False, "help": "Python venv for llama tooling"},
+    {"key": "hf_dl",        "default": "~/hf_download.py",                       "env": "SPARK_HF_DL",              "type": "str",  "init": False, "help": "hf_download.py path on the DGX"},
+    {"key": "port",         "default": 30000,                                    "env": "SPARK_PORT",               "type": "int",  "init": True,  "help": "Base port for llama-server (first model)"},
+    {"key": "mem_reserve_gb", "default": 8,                                      "env": "SPARK_MEM_RESERVE_GB",     "type": "int",  "init": False, "help": "Free-memory headroom (GB) the serve fit-check keeps"},
+    {"key": "comfy_dir",    "default": "~/comfyui-aeon-spark",                   "env": "SPARK_COMFY_DIR",          "type": "str",  "init": False, "help": "ComfyUI install dir on the DGX"},
+    {"key": "comfy_port",   "default": 8188,                                     "env": "SPARK_COMFY_PORT",         "type": "int",  "init": False, "help": "ComfyUI HTTP port"},
+    {"key": "whisper_bin",  "default": "~/whisper.cpp/build/bin/whisper-server", "env": "SPARK_WHISPER_BIN",        "type": "str",  "init": False, "help": "whisper-server binary path"},
+    {"key": "whisper_log",  "default": "~/whisper-server.log",                   "env": "SPARK_WHISPER_LOG",        "type": "str",  "init": False, "help": "whisper-server log file path"},
+    {"key": "whisper_models_dir", "default": "~/whisper.cpp/models",            "env": "SPARK_WHISPER_MODELS_DIR", "type": "str",  "init": False, "help": "Whisper ggml models directory"},
+    {"key": "download_log", "default": "~/models/download.log",                  "env": "SPARK_DOWNLOAD_LOG",       "type": "str",  "init": False, "help": "Download queue log path"},
+    {"key": "docker_rootless", "default": False,                                 "env": "SPARK_DOCKER_ROOTLESS",   "type": "bool", "init": False, "help": "Target the rootless Docker socket over SSH"},
+]
+
+_DEFAULTS = {c["key"]: c["default"] for c in _CONFIG}          # runtime defaults (derived)
+_ENV_MAP  = {c["env"]: c for c in _CONFIG}                     # env var → schema row (derived)
+
+
+def config_schema() -> list:
+    """The config rows (key, default, env, type, init, help) — single source of truth."""
+    return _CONFIG
+
+
+def config_example() -> dict:
+    """The `templates/spark.json.example` contents: every key at its default."""
+    return dict(_DEFAULTS)
+
+
+def _coerce(value: str, typ: str):
+    if typ == "int":
+        return int(value)
+    if typ == "bool":
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return value
+
 
 def load_config() -> dict:
     cfg = dict(_DEFAULTS)
-    # Env var overrides
-    env_map = {
-        "DGX_HOST":                 "dgx_host",
-        "DGX_USER":                 "dgx_user",
-        "SPARK_MODELS_DIR":         "models_dir",
-        "SPARK_SERVER_BIN":         "server_bin",
-        "SPARK_SERVER_LOG":         "server_log",
-        "SPARK_VENV":               "venv",
-        "SPARK_HF_DL":              "hf_dl",
-        "SPARK_PORT":               "port",
-        "SPARK_COMFY_DIR":          "comfy_dir",
-        "SPARK_WHISPER_BIN":        "whisper_bin",
-        "SPARK_WHISPER_LOG":        "whisper_log",
-        "SPARK_WHISPER_MODELS_DIR": "whisper_models_dir",
-        "SPARK_DOWNLOAD_LOG":       "download_log",
-        "SPARK_DOCKER_ROOTLESS":    "docker_rootless",
-        "SPARK_MEM_RESERVE_GB":     "mem_reserve_gb",
-    }
-    for env, key in env_map.items():
+    # Env var overrides (derived from the schema)
+    for env, c in _ENV_MAP.items():
         if os.environ.get(env):
-            if key in ("port", "mem_reserve_gb"):
-                cfg[key] = int(os.environ[env])
-            elif key == "docker_rootless":
-                cfg[key] = os.environ[env].strip().lower() in ("1", "true", "yes", "on")
-            else:
-                cfg[key] = os.environ[env]
+            cfg[c["key"]] = _coerce(os.environ[env], c["type"])
     # File overrides
     if CONFIG_PATH.exists():
         try:

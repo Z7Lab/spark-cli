@@ -1,0 +1,18 @@
+{
+  "dgx_host": "gx10-<id>.local",
+  "dgx_user": "your-user",
+  "models_dir": "~/models",
+  "server_bin": "~/llama.cpp/build/bin/llama-server",
+  "server_log": "~/llama-server.log",
+  "venv": "~/llama-cpp-venv",
+  "hf_dl": "~/hf_download.py",
+  "port": 30000,
+  "mem_reserve_gb": 8,
+  "comfy_dir": "~/comfyui-aeon-spark",
+  "comfy_port": 8188,
+  "whisper_bin": "~/whisper.cpp/build/bin/whisper-server",
+  "whisper_log": "~/whisper-server.log",
+  "whisper_models_dir": "~/whisper.cpp/models",
+  "download_log": "~/models/download.log",
+  "docker_rootless": false
+}

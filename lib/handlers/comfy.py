@@ -14,13 +14,10 @@ from sparkcore import (
     _models_catalog, _run_pull,
 )
 
-_PORT = 8188
-
-
 def start(params, cfg):
     """Start AEON-Spark ComfyUI via docker compose (port 8188)."""
     compose_dir = cfg["comfy_dir"]
-    port = _PORT
+    port = cfg["comfy_port"]
     # Pre-flight: a dead/unreachable daemon must fail fast with the real
     # remedy — never fall through to polling :8188 for 90s (bug A1).
     state, raw = docker_probe(cfg)
@@ -80,7 +77,7 @@ def stop(params, cfg):
 
 def status(params, cfg):
     """Show ComfyUI state and UI URL."""
-    port = _PORT
+    port = cfg["comfy_port"]
     container = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
     result = {"action": "comfy.status", "port": port, "container": container or None,
               "running": bool(container), "ready": False, "docker": None}
@@ -132,7 +129,7 @@ def generate(params, cfg):
     encoder  = params["encoder"]
     vae      = params["vae"]
 
-    base = f"http://{cfg['dgx_host']}:8188"
+    base = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
     graph = {
         "1":  {"class_type": "UNETLoader", "inputs": {"unet_name": model, "weight_dtype": "default"}},
         "2":  {"class_type": "ModelSamplingFlux", "inputs": {"model": ["1", 0], "max_shift": 1.15, "base_shift": 0.5, "width": width, "height": height}},
@@ -218,7 +215,7 @@ def animate(params, cfg):
     if not tmpl.is_file():
         print(fail(f"Workflow template missing: {tmpl}")); sys.exit(1)
     graph = json.loads(tmpl.read_text())
-    base = f"http://{cfg['dgx_host']}:8188"
+    base = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
 
     # 1) upload the still to ComfyUI's input folder (multipart)
     boundary = "----spark" + uuid.uuid4().hex

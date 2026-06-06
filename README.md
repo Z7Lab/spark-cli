@@ -296,22 +296,14 @@ Key design choices — each is intentional, not accidental:
 
 ## Config
 
-Config file: `~/.config/spark.json` (create with `spark init`)
+Config file: `~/.config/spark.json` (create with `spark init`, or copy
+[`templates/spark.json.example`](templates/spark.json.example) and edit).
 
-| Key | Default | Env var override |
-|-----|---------|-----------------|
-| `dgx_host` | `gx10-<id>.local` | `DGX_HOST` |
-| `dgx_user` | `user` | `DGX_USER` |
-| `models_dir` | `~/models` | `SPARK_MODELS_DIR` |
-| `server_bin` | `~/llama.cpp/build/bin/llama-server` | `SPARK_SERVER_BIN` |
-| `server_log` | `~/llama-server.log` | `SPARK_SERVER_LOG` |
-| `port` | `30000` | `SPARK_PORT` |
-| `mem_reserve_gb` | `8` | `SPARK_MEM_RESERVE_GB` |
-| `comfy_dir` | `~/comfyui-aeon-spark` | `SPARK_COMFY_DIR` |
-| `whisper_bin` | `~/whisper.cpp/build/bin/whisper-server` | `SPARK_WHISPER_BIN` |
-| `whisper_log` | `~/whisper-server.log` | `SPARK_WHISPER_LOG` |
-| `whisper_models_dir` | `~/whisper.cpp/models` | `SPARK_WHISPER_MODELS_DIR` |
-| `download_log` | `~/models/download.log` | `SPARK_DOWNLOAD_LOG` |
+Run **`spark config`** to see every setting, its current value, its env-var override,
+and a one-line description. There's no hand-maintained list here on purpose — the
+defaults, env vars, `spark init` prompts, the example file, and `spark config` all
+**derive from one schema** (`_CONFIG` in `lib/sparkcore.py`), so they can't drift.
+Precedence per key: **env var > `~/.config/spark.json` > default**.
 
 Every service path is configurable, so the whole stack can be relocated (e.g.
 consolidated under a single service-account-owned `/opt/spark` tree) by editing

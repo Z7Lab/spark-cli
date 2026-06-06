@@ -25,7 +25,7 @@
       "title": "Ensure ComfyUI is serving on the Spark",
       "precondition": {
         "where": "remote",
-        "probe": "curl -sf http://localhost:8188/ -o /dev/null && echo up",
+        "probe": "curl -sf http://localhost:{comfy_port}/ -o /dev/null && echo up",
         "ready_if": "up"
       },
       "remedy": "spark comfy start",

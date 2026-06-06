@@ -11,6 +11,7 @@ from sparkcore import (
     CONFIG_PATH, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen, docker_probe, _docker_env,
     _llm_instances, _is_quant_dir, _parse_quant,
+    config_schema, _coerce,
 )
 
 
@@ -23,20 +24,13 @@ def init(params, cfg):
     print(bold("spark init — configure DGX Spark connection\n"))
     print(f"  Config will be saved to: {cyan(str(CONFIG_PATH))}\n")
 
-    fields = [
-        ("dgx_host",   "DGX hostname or IP"),
-        ("dgx_user",   "SSH username"),
-        ("models_dir", "Models directory on DGX"),
-        ("server_bin", "llama-server binary path"),
-        ("server_log", "Server log file path"),
-        ("port",       "Server port"),
-    ]
-
     new_cfg = {}
-    for key, label in fields:
-        current = cfg[key]
-        val = input(f"  {label} [{current}]: ").strip()
-        new_cfg[key] = (int(val) if key == "port" and val else current) if not val else val
+    for c in config_schema():
+        if not c.get("init"):
+            continue
+        current = cfg[c["key"]]
+        val = input(f"  {c['help']} [{current}]: ").strip()
+        new_cfg[c["key"]] = _coerce(val, c["type"]) if val else current
 
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(new_cfg, indent=2) + "\n")
@@ -111,9 +105,10 @@ def status(params, cfg):
     comfy_container = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=comfy --format '{{.Names}} {{.Status}}' 2>/dev/null | head -1")
     state["comfy"] = comfy_container or None
     if comfy_container:
-        c_health = ssh(cfg, "curl -sf http://localhost:8188/ -o /dev/null -w '%{http_code}' || echo 0")
+        cport = cfg["comfy_port"]
+        c_health = ssh(cfg, f"curl -sf http://localhost:{cport}/ -o /dev/null -w '%{{http_code}}' || echo 0")
         if c_health.strip() in ("200", "101"):
-            print(f"  ComfyUI  {ok(f'http://{host}:8188')}")
+            print(f"  ComfyUI  {ok(f'http://{host}:{cport}')}")
         else:
             print(f"  ComfyUI  {warn('starting...')}  {dim(comfy_container)}")
     else:
@@ -268,8 +263,25 @@ def logs_dl(params, cfg):
     return {"action": "core.logs_dl", "log": cfg["download_log"]}
 
 
+def config(params, cfg):
+    """Print every setting, its current value, env var, and help (the config schema)."""
+    print(bold("spark config") + dim("   precedence: env var  >  ~/.config/spark.json  >  default"))
+    exists = CONFIG_PATH.exists()
+    print(dim(f"  file: {CONFIG_PATH}" + ("" if exists else "  (not created — run: spark init)")) + "\n")
+    rows = config_schema()
+    kw = max(len(c["key"]) for c in rows)
+    for c in rows:
+        print(f"  {cyan(c['key'].ljust(kw))}  {str(cfg[c['key']])}")
+        print(f"  {' ' * kw}  {dim(c['env'] + '  ·  ' + c['help'])}")
+    print(dim(f"\n  example: templates/spark.json.example  →  copy to {CONFIG_PATH} and edit"))
+    return {"action": "core.config",
+            "schema": [{k: c[k] for k in ("key", "default", "env", "type", "help")} for c in rows],
+            "current": {c["key"]: cfg[c["key"]] for c in rows}}
+
+
 HANDLERS = {
     "core.init":     init,
+    "core.config":   config,
     "core.status":   status,
     "core.models":   models,
     "core.download": download,
