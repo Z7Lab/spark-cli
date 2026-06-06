@@ -295,16 +295,125 @@ def pull_models(params, cfg):
     which = params["set"]
     catalog, _ = _models_catalog()
     comfy = catalog.get("comfy", {})
-    sets = ["generate", "animate"] if which == "all" else [which]
+    sets = list(comfy.keys()) if which == "all" else [which]
     models_root = f"{cfg['comfy_dir']}/workspace/models"
     jobs = [
         {"repo": e["repo_id"], "dest": f"{models_root}/{e['subdir']}",
-         "glob": e["glob"], "label": e["label"], "flat": True}
+         "glob": e["glob"], "label": e["label"], "flat": True, "rename": e.get("rename")}
         for s in sets for e in comfy.get(s, [])
     ]
     _run_pull(cfg, jobs, done_hint=f"Verify with {cyan('spark comfy status')} and re-run a gen.")
     return {"action": "comfy.pull_models", "set": which, "sets": sets,
             "pulled": [j["dest"] for j in jobs]}
+
+
+_QR_STYLES = {
+    "cyberpunk": {"ckpt": "dreamshaper_8.safetensors",
+        "prompt": ("a cyberpunk cyborg woman with white hair, sleek glossy bodysuit with glowing neon "
+                   "accents, futuristic neon temple, teal and magenta volumetric lighting, reflective "
+                   "floor, intricate sci-fi detail, cinematic, masterpiece, highly detailed")},
+    "anime": {"ckpt": "Counterfeit-V3.0_fix_fp16.safetensors",
+        "prompt": ("anime cyberpunk city at night, neon-lit skyscrapers with glowing grid windows, dense "
+                   "futuristic megacity, teal and magenta neon signs, rain reflections, intricate detailed "
+                   "architecture, masterpiece, best quality, sharp focus")},
+}
+_QR_MODES = {  # the two angles: reliable-stylised vs more-scene (lower scan rate — curate seeds)
+    "stylized": {"qr_s": 1.35, "qr_end": 1.0, "br_s": 0.40, "br_end": 0.70},
+    "art":      {"qr_s": 1.10, "qr_end": 0.90, "br_s": 0.50, "br_end": 0.75},
+}
+
+
+def qr_art(params, cfg):
+    """Generate scannable QR-code art (SD1.5 + QR-Monster + brightness ControlNets)."""
+    import random, uuid, urllib.request, urllib.parse, urllib.error
+    try:
+        import qrcode
+        from PIL import Image
+    except ImportError:
+        print(fail("qr-art needs qrcode + Pillow:  pip install --break-system-packages qrcode pillow")); sys.exit(1)
+
+    url, style, mode = params["url"], params["style"], params["mode"]
+    seed = params["seed"] if params["seed"] is not None else random.randint(1, 2**31 - 1)
+    out = str(Path(params["out"]).expanduser()) if params["out"] else str(Path.cwd() / "qr_art.png")
+    if style not in _QR_STYLES:
+        print(fail(f"Unknown --style '{style}' (one of: {', '.join(_QR_STYLES)})")); sys.exit(1)
+    if mode not in _QR_MODES:
+        print(fail(f"Unknown --mode '{mode}' (one of: {', '.join(_QR_MODES)})")); sys.exit(1)
+    st, md = _QR_STYLES[style], _QR_MODES[mode]
+
+    qr = qrcode.QRCode(error_correction=qrcode.constants.ERROR_CORRECT_H, box_size=10, border=4)
+    qr.add_data(url); qr.make(fit=True)
+    ctrl = Path("/tmp/spark_qr_control.png")
+    qr.make_image(fill_color="black", back_color="white").convert("RGB").resize((768, 768), Image.NEAREST).save(ctrl)
+
+    base = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
+    boundary = "----spark" + uuid.uuid4().hex
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; filename=\"{ctrl.name}\"\r\n"
+            f"Content-Type: image/png\r\n\r\n").encode() + ctrl.read_bytes() + \
+           (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\ntrue\r\n--{boundary}--\r\n").encode()
+    try:
+        up = json.load(urllib.request.urlopen(urllib.request.Request(
+            base + "/upload/image", data=body,
+            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=60))
+    except urllib.error.URLError as e:
+        print(fail(f"Cannot reach ComfyUI at {base} ({getattr(e, 'reason', e)}).  Check: {cyan('spark comfy status')}")); sys.exit(1)
+    uploaded = up.get("name", ctrl.name)
+
+    graph = json.loads((REPO_ROOT / "templates" / "qr_art_api.json").read_text())
+    graph.pop("_comment", None)
+    graph["4"]["inputs"]["ckpt_name"] = st["ckpt"]
+    graph["6"]["inputs"]["text"] = st["prompt"]
+    graph["11"]["inputs"]["image"] = uploaded
+    graph["14"]["inputs"].update(strength=md["qr_s"], end_percent=md["qr_end"])
+    graph["16"]["inputs"].update(strength=md["br_s"], end_percent=md["br_end"])
+    graph["3"]["inputs"]["seed"] = seed
+
+    print(f"QR art  {cyan(url)}  {dim(f'(style={style} mode={mode} seed={seed})')}")
+    try:
+        pid = json.load(urllib.request.urlopen(urllib.request.Request(
+            base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
+            headers={"Content-Type": "application/json"}), timeout=60))["prompt_id"]
+    except urllib.error.HTTPError as e:
+        print(fail(f"ComfyUI rejected the workflow: {e.read().decode()[:700]}")); sys.exit(1)
+
+    t0 = time.time(); img = None
+    while time.time() - t0 < 600:
+        time.sleep(3)
+        try:
+            h = json.load(urllib.request.urlopen(base + "/history/" + pid, timeout=60))
+        except Exception:
+            continue
+        if pid in h:
+            sd = h[pid].get("status", {})
+            if sd.get("status_str") == "error":
+                print("\n" + fail("qr-art failed:")); print(f"  {json.dumps(sd.get('messages', []))[:1000]}"); sys.exit(1)
+            for o in h[pid].get("outputs", {}).values():
+                for v in o.get("images", []):
+                    img = v
+            if img:
+                break
+        print(f"\r  ...{int(time.time() - t0)}s", end="", flush=True)
+    print()
+    if not img:
+        print(fail("Timed out (10 min).")); sys.exit(1)
+    q = urllib.parse.urlencode({"filename": img["filename"], "subfolder": img.get("subfolder", ""), "type": img.get("type", "output")})
+    blob = urllib.request.urlopen(base + "/view?" + q, timeout=120).read()
+    Path(out).write_bytes(blob)
+
+    scanned = None
+    try:
+        import cv2
+        a = cv2.imread(out); g = cv2.cvtColor(a, cv2.COLOR_BGR2GRAY)
+        _, o = cv2.threshold(g, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        det = cv2.QRCodeDetector()
+        scanned = bool(next((d for d in (det.detectAndDecode(c)[0] for c in (a, o, 255 - o)) if d), ""))
+    except ImportError:
+        pass
+    mark = dim("scan unverified (no opencv)") if scanned is None else \
+        (ok("scans ✓") if scanned else warn("did NOT scan — re-roll --seed, or use --mode stylized"))
+    print(ok(f"Saved: {cyan(out)}  {dim(f'({len(blob)//1024} KB)')}  ") + mark)
+    return {"action": "comfy.qr_art", "out": out, "url": url, "style": style,
+            "mode": mode, "seed": seed, "scanned": scanned}
 
 
 HANDLERS = {
@@ -315,4 +424,5 @@ HANDLERS = {
     "comfy.generate":    generate,
     "comfy.animate":     animate,
     "comfy.pull_models": pull_models,
+    "comfy.qr_art":      qr_art,
 }

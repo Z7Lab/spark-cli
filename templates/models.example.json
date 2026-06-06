@@ -13,6 +13,12 @@
       { "repo_id": "Comfy-Org/ltx-2",        "glob": "gemma_3_12B_it_fp4_mixed.safetensors",       "subdir": "text_encoders",         "label": "Gemma-3 12B IT text encoder (NVFP4 mixed)" },
       { "repo_id": "Lightricks/LTX-2.3",     "glob": "ltx-2.3-22b-distilled-lora-384.safetensors", "subdir": "loras",                 "label": "LTX-2.3 distilled LoRA-384" },
       { "repo_id": "Lightricks/LTX-2.3",     "glob": "ltx-2.3-spatial-upscaler-x2-1.1.safetensors","subdir": "latent_upscale_models", "label": "LTX-2.3 spatial upscaler x2 v1.1" }
+    ],
+    "qr-art": [
+      { "repo_id": "digiplay/DreamShaper_8", "glob": "dreamshaper_8.safetensors", "subdir": "checkpoints", "flat": true, "label": "DreamShaper 8 (qr-art cyberpunk style)" },
+      { "repo_id": "gsdf/Counterfeit-V3.0",  "glob": "Counterfeit-V3.0_fix_fp16.safetensors", "subdir": "checkpoints", "flat": true, "label": "Counterfeit V3 (qr-art anime style)" },
+      { "repo_id": "monster-labs/control_v1p_sd15_qrcode_monster", "glob": "*qrcode_monster_v2.safetensors", "subdir": "controlnet", "flat": true, "label": "QR-Monster ControlNet v2" },
+      { "repo_id": "latentcat/control_v1p_sd15_brightness", "glob": "diffusion_pytorch_model.safetensors", "subdir": "controlnet", "flat": true, "rename": "control_v1p_sd15_brightness.safetensors", "label": "Brightness ControlNet" }
     ]
   },
 

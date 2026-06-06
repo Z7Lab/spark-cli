@@ -43,7 +43,8 @@ spark llm open [--port N]                         Open built-in chat UI in brows
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
 spark comfy generate "<prompt>"                   FLUX.2 text-to-image, downloads the PNG
 spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
-spark comfy pull-models [--set generate|animate|all]  Download the models those commands need
+spark comfy qr-art <url> [--style --mode]         Scannable QR-code art (ControlNet)
+spark comfy pull-models [--set generate|animate|qr-art|all]  Download the models those commands need
 
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
@@ -82,7 +83,7 @@ Playbooks are single files — a fenced ` ```spec ` JSON block (typed inputs +
 precondition-gated steps) plus `## <step-id>` markdown pages. They merge two sources:
 
 - **Shipped** (general) in [`playbooks/`](playbooks/): `audio-transcribe`,
-  `image-to-video`, `llm-serve`.
+  `image-to-video`, `llm-serve`, `qr-art`.
 - **Personal** (git-ignored) in `~/.config/spark/playbooks/` — your own recipes; these
   override shipped ones by name. Copy [`playbooks/playbook.example.md`](playbooks/playbook.example.md)
   to start. Validate with `spark playbook check <name>`.

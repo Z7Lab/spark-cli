@@ -33,6 +33,24 @@ graph [`templates/ltx2_i2v_api.json`](../templates/ltx2_i2v_api.json), runs the 
 model). Options: `--seed --out`. The audio track is steered by the prompt — describe
 "epic orchestral music" etc. to push it.
 
+## 2b. QR-code art (`spark comfy qr-art`)
+
+Turn a URL into a **scannable QR-code art** image (nhciao "ControlNet for QR Code"):
+builds a high-ECC control QR, then runs SD1.5 + **QR-Monster** (structure) + **brightness**
+(luminance) ControlNets via [`templates/qr_art_api.json`](../templates/qr_art_api.json) so
+the code sinks into the art. Auto-verifies it scans (with opencv).
+
+```bash
+spark comfy pull-models --set qr-art                 # one-time: SD1.5 + ControlNets (~5 GB)
+spark comfy qr-art https://example.com --style cyberpunk --mode stylized --out qr.png
+```
+
+`--style cyberpunk|anime`, `--mode stylized` (reliable scan) `|art` (more scene, lower
+scan rate — re-roll `--seed` and curate). Needs `qrcode`+`Pillow` locally
+(`pip install --break-system-packages qrcode opencv-python-headless`). The
+[`qr-art` playbook](../playbooks/qr-art.md) wraps this with the model/dep checks and the
+curate loop. See `dev-resources/.../tests/qr-code-art-*.md` (private) for the tuning trail.
+
 ### Seed variations — getting the best take
 
 LTX i2v **motion varies a lot run-to-run** for the same image+prompt (the seed

@@ -1,0 +1,15 @@
+{
+  "_comment": "Flattened ComfyUI API graph for `spark comfy qr-art` — SD1.5 + QR-Monster + brightness ControlNets, txt2img. The handler patches: node 4 ckpt_name (style), node 6 text (prompt), node 11 image (uploaded control QR), node 14/16 strength+end_percent (mode), node 3 seed. Models pulled via `spark comfy pull-models --set qr-art`.",
+  "4":  {"class_type": "CheckpointLoaderSimple", "inputs": {"ckpt_name": "dreamshaper_8.safetensors"}},
+  "6":  {"class_type": "CLIPTextEncode", "inputs": {"text": "PROMPT", "clip": ["4", 1]}},
+  "7":  {"class_type": "CLIPTextEncode", "inputs": {"text": "blurry, low quality, watermark, text, signature, ugly, deformed, extra limbs, washed out", "clip": ["4", 1]}},
+  "11": {"class_type": "LoadImage", "inputs": {"image": "PLACEHOLDER.png"}},
+  "5":  {"class_type": "EmptyLatentImage", "inputs": {"width": 768, "height": 768, "batch_size": 1}},
+  "13": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "control_v1p_sd15_qrcode_monster_v2.safetensors"}},
+  "15": {"class_type": "ControlNetLoader", "inputs": {"control_net_name": "control_v1p_sd15_brightness.safetensors"}},
+  "14": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["6", 0], "negative": ["7", 0], "control_net": ["13", 0], "image": ["11", 0], "strength": 1.3, "start_percent": 0.0, "end_percent": 0.9}},
+  "16": {"class_type": "ControlNetApplyAdvanced", "inputs": {"positive": ["14", 0], "negative": ["14", 1], "control_net": ["15", 0], "image": ["11", 0], "strength": 0.45, "start_percent": 0.0, "end_percent": 0.7}},
+  "3":  {"class_type": "KSampler", "inputs": {"model": ["4", 0], "positive": ["16", 0], "negative": ["16", 1], "latent_image": ["5", 0], "seed": 1, "steps": 30, "cfg": 7.0, "sampler_name": "dpmpp_2m", "scheduler": "karras", "denoise": 1.0}},
+  "8":  {"class_type": "VAEDecode", "inputs": {"samples": ["3", 0], "vae": ["4", 2]}},
+  "9":  {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "filename_prefix": "qr_art"}}
+}

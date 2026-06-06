@@ -409,11 +409,13 @@ def _run_pull(cfg, jobs, done_hint=""):
         print(f"     {dim(j['repo'])} → {dim(j['dest'])}")
     print()
 
-    chain = " && ".join(
-        f"echo '[{i}/{n}] {j['label']}' && "
-        f"python3 {cfg['hf_dl']} {j['repo']} {j['dest']} '{j['glob']}'" + (" --flat" if j.get("flat") else "")
-        for i, j in enumerate(jobs, 1)
-    )
+    def _cmd(i, j):
+        c = (f"echo '[{i}/{n}] {j['label']}' && "
+             f"python3 {cfg['hf_dl']} {j['repo']} {j['dest']} '{j['glob']}'" + (" --flat" if j.get("flat") else ""))
+        if j.get("rename"):  # repos with generic filenames (e.g. diffusion_pytorch_model.safetensors)
+            c += f" && mv -f {j['dest']}/{Path(j['glob']).name} {j['dest']}/{j['rename']}"
+        return c
+    chain = " && ".join(_cmd(i, j) for i, j in enumerate(jobs, 1))
     rc = subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}", chain]).returncode
     if rc == 0:
         print(ok(f"\nDone.{(' ' + done_hint) if done_hint else ''}"))

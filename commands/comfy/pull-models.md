@@ -8,8 +8,8 @@
   "summary": "Download the models generate/animate need",
   "handler": "comfy.pull_models",
   "params": [
-    {"name": "set", "type": "string", "options": ["generate", "animate", "all"], "default": "all",
-     "help": "Which model set to pull: generate (FLUX.2), animate (LTX-2.3), or all"}
+    {"name": "set", "type": "string", "options": ["generate", "animate", "qr-art", "all"], "default": "all",
+     "help": "Which model set to pull: generate (FLUX.2), animate (LTX-2.3), qr-art (SD1.5+ControlNets), or all"}
   ]
 }
 ```
