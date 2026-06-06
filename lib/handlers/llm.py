@@ -301,8 +301,7 @@ def pull_models(params, cfg):
         print("spark llm pull-models [<name> ...] [--all]")
         print(f"\n  Download LLM model(s) from the catalog into models_dir/<name>.")
         print(f"  Source: {dim(str(src))}")
-        if src.name == "models.example.json":
-            print(dim("  (repo example — copy to ~/.config/spark.models.json to customize)"))
+        print(dim("  (edit templates/models.json to customize)"))
         print()
         for m in models:
             print(f"    {cyan(m['name'])}   {dim(m['label'])}")

@@ -15,9 +15,6 @@
 ```
 
 Downloads LLM model(s) from the catalog (the `llm` section of
-`~/.config/spark.models.json`, else the repo example) into `models_dir/<name>`.
-Run with no args to list the catalog with sizes; these models are large, so it
-never bulk-pulls without explicit names or `--all`.
-
-Copy `templates/models.example.json` to `~/.config/spark.models.json` to
-customize the catalog.
+`templates/models.json`) into `models_dir/<name>`. Run with no args to list the
+catalog with sizes; these models are large, so it never bulk-pulls without
+explicit names or `--all`. Edit `templates/models.json` to customize the catalog.

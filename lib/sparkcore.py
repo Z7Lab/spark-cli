@@ -371,17 +371,18 @@ def _port_log(cfg: dict, port) -> str:
 
 # ── Model catalog / downloads ───────────────────────────────────────────────────
 
-MODELS_USER_PATH = Path.home() / ".config" / "spark.models.json"
-
 REPO_ROOT = Path(__file__).resolve().parent.parent
+
+MODELS_PATH = REPO_ROOT / "templates" / "models.json"
+MODELS_EXAMPLE = REPO_ROOT / "templates" / "models.example.json"
 
 
 def _models_catalog():
-    """Load the model catalog. Prefer the user's editable ~/.config/spark.models.json,
-    else fall back to the repo example. Returns (catalog_dict, source_path)."""
-    repo_example = REPO_ROOT / "templates" / "models.example.json"
-    path = MODELS_USER_PATH if MODELS_USER_PATH.exists() else repo_example
-    return json.loads(path.read_text()), path
+    """Load the model catalog from templates/models.json, creating it from
+    models.example.json if absent. Returns (catalog_dict, path)."""
+    if not MODELS_PATH.exists():
+        MODELS_PATH.write_text(MODELS_EXAMPLE.read_text())
+    return json.loads(MODELS_PATH.read_text()), MODELS_PATH
 
 
 def _run_pull(cfg, jobs, done_hint=""):

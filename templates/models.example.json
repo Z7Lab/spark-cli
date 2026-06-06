@@ -1,5 +1,5 @@
 {
-  "_comment": "Editable model catalog for spark's `pull-models` commands. Copy this to ~/.config/spark.models.json and edit it to set up your own models — the pull commands prefer that file and fall back to this repo example. Every repo below is PUBLIC (no HuggingFace token needed). Pulled with the bundled bin/hf_download.py.",
+  "_comment": "Model catalog for spark's `pull-models` commands (sections: comfy, whisper, llm). All repos are PUBLIC — no HuggingFace token needed. Pulled with the bundled bin/hf_download.py.",
 
   "comfy": {
     "_comment": "Required by `spark comfy generate` (FLUX.2) and `animate` (LTX-2.3). Fixed dependency set — landed (via --flat) in ComfyUI's models/<subdir>/<file>. Edit only if you swap the comfy workflows.",

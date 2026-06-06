@@ -107,10 +107,7 @@ Point a client at it:
 `spark _schema [name]` prints the same tool schemas for inspection.
 
 Models for each service are listed in an editable catalog,
-[`templates/models.example.json`](templates/models.example.json) (sections:
-`comfy`, `whisper`, `llm`). Copy it to `~/.config/spark.models.json` and edit to
-pick your own — the `pull-models` commands prefer that file, falling back to the
-repo example. The `llm` section lists large MoE models validated for the GB10's
+`templates/models.json` (sections: `comfy`, `whisper`, `llm`). The `llm` section lists large MoE models validated for the GB10's
 128 GB unified memory in Unsloth Dynamic (UD) quants — each entry carries the quant,
 footprint, and rationale (run `spark llm pull-models` to see them). Edit freely.
 
@@ -179,7 +176,7 @@ spark comfy logs
 UI at: `http://gx10-<id>.local:8188`
 
 **First, the models** — `spark comfy pull-models` downloads everything `generate`
-and `animate` need (from the model catalog `templates/models.example.json`, via the
+and `animate` need (from the runtime model catalog `templates/models.json`, via the
 bundled downloader) into ComfyUI's models dir on the DGX. `--set generate` or
 `--set animate` pulls just one. Resume-safe; all repos are public.
 

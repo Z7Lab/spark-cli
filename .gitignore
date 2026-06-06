@@ -1,3 +1,7 @@
+# Runtime model catalog — the operator's own editable list, seeded from
+# templates/models.example.json on first use.
+templates/models.json
+
 # Python bytecode
 __pycache__/
 *.py[cod]
