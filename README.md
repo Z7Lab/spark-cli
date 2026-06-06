@@ -265,14 +265,15 @@ same set, kept in one scannable place. Commands run **on the DGX** unless noted
 
 ## Architecture & design decisions
 
-`spark` is a single Python file (`bin/spark`) that runs on the **operator's workstation** and reaches the DGX entirely over SSH. There is no daemon, no background service, and no persistent process on the workstation side.
+`spark` runs on the **operator's workstation** and reaches the DGX entirely over SSH. There is no daemon, no background service, and no persistent process on the workstation side.
 
 Key design choices — each is intentional, not accidental:
 
+- **Manifest-driven, single source of truth.** Every command is defined ONCE in a manifest under `commands/<domain>/<verb>.md` — a fenced ` ```spec ` JSON block (name, typed `params`, `handler` ref) plus a markdown help body. That one definition drives CLI routing, the three-level `--help` hierarchy, and MCP-ready tool schemas (`spark _schema`). `bin/spark` is a thin entry point: it loads manifests, routes argv, parses it against the matched spec (`lib/cliparse.py`), and calls the handler (`lib/handlers/<domain>.py`). argv is interpreted in exactly one place, and the `handler(params, cfg)` contract is callable identically from the CLI and a future MCP server. Commands and playbooks share the same file shape and parser.
 - **SSH-based remote management.** Every command shells out to `ssh user@host '...'`. No agent runs on the DGX; the DGX is managed like a remote host, not a peer.
 - **One `llama-server` process per model.** Each loaded model gets its own port. This makes unloading precise (kill one process, free exactly that model's VRAM), avoids a multiplexing router, and keeps port numbers as stable identifiers (`--port 30000` always means that one model).
 - **`screen` sessions for process persistence.** `llama-server` and `whisper-server` run in detached `screen` sessions so they outlive the SSH connection that started them.
-- **Zero Python dependencies.** `bin/spark`, `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only. The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
+- **Zero Python dependencies.** `bin/spark`, the `lib/` package (manifest loader, parser, handlers), `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only (the `image` verbs alone need Pillow, gated behind a clear hint). The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
 - **All service paths are configurable.** Every binary, log, and model directory is a config key in `~/.config/spark.json`. Relocating the whole stack (e.g. to `/opt/spark` under a `svc-spark` service account) is a config edit, not a code change.
 
 ## Config

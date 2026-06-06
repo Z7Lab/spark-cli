@@ -16,8 +16,9 @@ at `http://<dgx-host>:8188` and downloads results to your workstation.
 spark comfy generate "a red fox in a snowy forest at dawn"
 spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
 ```
-Flat 11-node FLUX.2 graph built inline in `bin/spark`. First run loads the models
-into the GB10's unified memory (a few min); then ~30–60 s each.
+Flat 11-node FLUX.2 graph built inline in the comfy handler
+(`lib/handlers/comfy.py`). First run loads the models into the GB10's unified
+memory (a few min); then ~30–60 s each.
 Options: `--width --height --steps --guidance --seed --out --model --encoder --vae`.
 
 ## 2. Animate a still (LTX-2.3 image-to-video)
@@ -102,7 +103,7 @@ queue time; there's no server endpoint for it. So we flatten **once**, freeze th
 result as a template, and let the CLI patch it at runtime:
 
 ```
-ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ templates/<x>.json ──(bin/spark)──▶ /prompt
+ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ templates/<x>.json ──(lib/handlers/comfy.py)──▶ /prompt
 ```
 
 **To add a new ComfyUI workflow as a spark command:**
@@ -118,11 +119,15 @@ ComfyUI workflow.json ──(tools/flatten_comfy_workflow.py, once)──▶ tem
    ```
    The tool prints (to stderr) the `LoadImage` node ids and the prompt node id —
    the parameterisable hooks.
-3. Add a `_comfy_<verb>` function in [`bin/spark`](../bin/spark) (copy `_comfy_animate`): load the
-   template, patch the hooks by `class_type` (`LoadImage` → image, prompt node →
-   text, `RandomNoise` → seed), POST `/prompt`, poll `/history`, download via
-   `/view`.
-4. Wire it into `cmd_comfy` dispatch + `_COMFY_HELP` + the README.
+3. Add a `<verb>(params, cfg)` handler in [`lib/handlers/comfy.py`](../lib/handlers/comfy.py)
+   (copy `animate`): load the template, patch the hooks by `class_type`
+   (`LoadImage` → image, prompt node → text, `RandomNoise` → seed), POST `/prompt`,
+   poll `/history`, download via `/view`, and `return` a structured `{action, …}` result.
+   Register it in that module's `HANDLERS` dict (`"comfy.<verb>": <verb>`).
+4. Add a manifest [`commands/comfy/<verb>.md`](../commands/comfy) — a ` ```spec ` block
+   (`domain: comfy`, `subcommand: <verb>`, typed `params`, `handler: comfy.<verb>`) plus a
+   markdown help body. Routing and `--help` are generated from it automatically; no
+   dispatch wiring or README edit needed.
 
 [`tools/flatten_comfy_workflow.py`](../tools/flatten_comfy_workflow.py) documents the non-obvious gotchas it handles
 (Reroute passthroughs, the `["COMBO", …]` object_info shape, consuming

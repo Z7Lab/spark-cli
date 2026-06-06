@@ -26,13 +26,13 @@
     {
       "id": "serve",
       "title": "Load the model (refuses if it won't fit)",
-      "command": "spark llm serve {model}",
+      "command": { "command": "llm.serve", "params": { "model": "{model}" } },
       "next": "verify"
     },
     {
       "id": "verify",
       "title": "Confirm it's resident",
-      "command": "spark llm list",
+      "command": { "command": "llm.list", "params": {} },
       "next": "DONE"
     }
   ]

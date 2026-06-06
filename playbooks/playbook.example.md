@@ -57,6 +57,12 @@ Notes:
   Use it for whole-flow deps (a binary, a library, a service); use per-step
   `precondition` for things a specific step needs. Each entry: `what`, optional
   `where`/`probe`/`ready_if`/`hint`.
+- A step's `command` may be **free-text** (`"spark transcribe start --model {model}"`)
+  or a **structured reference** to a manifest command
+  (`{"command": "transcribe.start", "params": {"model": "{model}"}}`). Prefer the
+  structured form for real spark commands — `playbook check` validates it against the
+  command's manifest (so a playbook can't silently rot when a flag changes), and `run`
+  renders it to the same CLI string. Free-text is the escape hatch for arbitrary shell.
 - `precondition.where` is `remote` (runs over SSH on the Spark) or `local` (runs on
   the workstation). `ready_if` is `nonempty` or a substring to match in the output.
 - Templates may reference `{input}` names **and** config keys (`{whisper_models_dir}`,
