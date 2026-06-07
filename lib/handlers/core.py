@@ -11,7 +11,7 @@ from sparkcore import (
     CONFIG_PATH, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen, docker_probe, _docker_env,
     _llm_instances, _is_quant_dir, _parse_quant,
-    config_schema, _coerce,
+    config_schema, _coerce, remote_script,
 )
 
 
@@ -210,7 +210,7 @@ def download(params, cfg):
     print(f"  Destination: {cyan(dest)}")
     print(f"  Pattern:     {pattern}\n")
     subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
-                    f"python3 {cfg['hf_dl']} {repo} {dest} '{pattern}'"])
+                    f"python3 {remote_script(cfg, 'hf_download.py')} {repo} {dest} '{pattern}'"])
     return {"action": "core.download", "repo": repo, "name": name,
             "pattern": pattern, "dest": dest}
 
@@ -236,7 +236,7 @@ def queue(params, cfg):
         print(f"     → {dest}  {dim(pattern)}")
     print()
 
-    dl_script = cfg['hf_dl']
+    dl_script = remote_script(cfg, 'hf_download.py')
     log = cfg['download_log']
     chain = " && ".join(
         f"echo '[{i+1}/{len(triplets)}] {name}' | tee -a {log} && "
@@ -273,18 +273,64 @@ def config(params, cfg):
     for c in rows:
         print(f"  {cyan(c['key'].ljust(kw))}  {str(cfg[c['key']])}")
         print(f"  {' ' * kw}  {dim(c['env'] + '  ·  ' + c['help'])}")
+
+    # Surface keys in the file that aren't in the schema — typos or stale keys
+    # (ignored at runtime), so they don't sit there silently doing nothing.
+    if exists:
+        try:
+            file_keys = set(json.loads(CONFIG_PATH.read_text()))
+        except (json.JSONDecodeError, OSError):
+            file_keys = set()
+        extra = sorted(file_keys - {c["key"] for c in rows})
+        if extra:
+            print(warn(f"\n  unrecognized keys in your config (ignored — remove them): {', '.join(extra)}"))
+
     print(dim(f"\n  example: templates/spark.json.example  →  copy to {CONFIG_PATH} and edit"))
     return {"action": "core.config",
             "schema": [{k: c[k] for k in ("key", "default", "env", "type", "help")} for c in rows],
             "current": {c["key"]: cfg[c["key"]] for c in rows}}
 
 
+def config_set(params, cfg):
+    """Set one key in ~/.config/spark.json, preserving the rest of the file."""
+    key, raw = params["key"], params["value"]
+    schema = {c["key"]: c for c in config_schema()}
+    if key not in schema:
+        print(fail(f"Unknown config key: {key}"))
+        print(dim("  Valid keys: " + ", ".join(c["key"] for c in config_schema())))
+        sys.exit(1)
+
+    try:
+        value = _coerce(raw, schema[key]["type"])
+    except ValueError:
+        print(fail(f"'{raw}' is not a valid {schema[key]['type']} for {key}."))
+        sys.exit(1)
+
+    existing = {}
+    if CONFIG_PATH.exists():
+        try:
+            existing = json.loads(CONFIG_PATH.read_text())
+        except json.JSONDecodeError as e:
+            print(fail(f"Config is not valid JSON ({CONFIG_PATH}): {e}"))
+            sys.exit(1)
+    old = existing.get(key, cfg.get(key))
+
+    existing[key] = value
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CONFIG_PATH.write_text(json.dumps(existing, indent=2) + "\n")
+    print(ok(f"{key}: {old!r} → {value!r}"))
+    print(dim(f"  written to {CONFIG_PATH}"))
+    return {"action": "core.config_set", "key": key, "old": old,
+            "value": value, "config_path": str(CONFIG_PATH)}
+
+
 HANDLERS = {
-    "core.init":     init,
-    "core.config":   config,
-    "core.status":   status,
-    "core.models":   models,
-    "core.download": download,
-    "core.queue":    queue,
-    "core.logs_dl":  logs_dl,
+    "core.init":       init,
+    "core.config":     config,
+    "core.config_set": config_set,
+    "core.status":     status,
+    "core.models":     models,
+    "core.download":   download,
+    "core.queue":      queue,
+    "core.logs_dl":    logs_dl,
 }

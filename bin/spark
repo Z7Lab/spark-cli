@@ -102,16 +102,25 @@ def main():
 
     # Resolve the target command entry and the argv tail to parse.
     if manifest.is_grouped(group):
-        if len(argv) < 2 or argv[1] in _HELP_FLAGS:
+        default = manifest.default_subcommand(group)
+        if len(argv) < 2:
+            # Bare `spark <domain>`: run its default sub if one is declared,
+            # otherwise list the subcommands.
+            if default is None:
+                print(manifest.domain_help(token, group, _COLORS))
+                return
+            entry = group[default]
+            tail = []
+        elif argv[1] in _HELP_FLAGS:
             print(manifest.domain_help(token, group, _COLORS))
             return
-        sub = argv[1]
-        if sub not in group:
-            print(red(f"Unknown {token} subcommand: {sub}"))
+        elif argv[1] in group:
+            entry = group[argv[1]]
+            tail = argv[2:]
+        else:
+            print(red(f"Unknown {token} subcommand: {argv[1]}"))
             print(f"  Run {cyan(f'spark {token} --help')} for usage.")
             sys.exit(1)
-        entry = group[sub]
-        tail = argv[2:]
     else:
         entry = group[None]
         tail = argv[1:]

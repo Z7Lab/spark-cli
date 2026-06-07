@@ -262,7 +262,7 @@ from the catalog's `tts` section — pull it once before the first `say`.
 ## Downloading models
 
 Uses [`bin/hf_download.py`](bin/hf_download.py) (ships in this repo; deployed to the
-DGX at `/opt/spark/bin/`) — a small urllib downloader: no `hf` CLI required, no
+DGX under `remote_bin`) — a small urllib downloader: no `hf` CLI required, no
 token needed for public models, resume-safe with completeness verification.
 
 ```bash
@@ -319,15 +319,19 @@ Key design choices — each is intentional, not accidental:
 Config file: `~/.config/spark.json` (create with `spark init`, or copy
 [`templates/spark.json.example`](templates/spark.json.example) and edit).
 
-Run **`spark config`** to see every setting, its current value, its env-var override,
-and a one-line description. There's no hand-maintained list here on purpose — the
-defaults, env vars, `spark init` prompts, the example file, and `spark config` all
-**derive from one schema** (`_CONFIG` in `lib/sparkcore.py`), so they can't drift.
-Precedence per key: **env var > `~/.config/spark.json` > default**.
+Run **`spark config`** (alias `spark config show`) to see every setting, its current
+value, its env-var override, and a one-line description, and **`spark config set
+<key> <value>`** to change one (validated, preserves the rest of the file). There's
+no hand-maintained list here on purpose — the defaults, env vars, `spark init`
+prompts, the example file, and `spark config` all **derive from one schema** (`_CONFIG`
+in `lib/sparkcore.py`), so they can't drift. Precedence per key: **env var >
+`~/.config/spark.json` > default**.
 
 Every service path is configurable, so the whole stack can be relocated (e.g.
 consolidated under a single service-account-owned `/opt/spark` tree) by editing
 `~/.config/spark.json` — no code changes. Set the keys to the new locations,
-e.g. `"comfy_dir": "/opt/spark/comfyui"`, `"models_dir": "/opt/spark/models"`.
+e.g. `spark config set models_dir /opt/spark/models`. The bundled on-box scripts
+(`hf_download.py`, `tts_gen.py`) live under one `remote_bin` dir — set it once
+(`spark config set remote_bin /opt/spark/bin`) and each script's path derives from it.
 
 Run `spark models` to list what's downloaded on your DGX, with quant and size.

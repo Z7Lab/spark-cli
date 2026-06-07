@@ -83,6 +83,15 @@ def is_grouped(group: dict) -> bool:
     return not (len(group) == 1 and None in group)
 
 
+def default_subcommand(group: dict):
+    """The subcommand to run when a grouped domain is invoked bare (e.g. `spark
+    config` → `show`), or None. Declared by `"default": true` in a command spec."""
+    for sub, e in group.items():
+        if sub is not None and e["spec"].get("default"):
+            return sub
+    return None
+
+
 def canonical_name(spec: dict) -> str:
     """Dotted canonical name, e.g. 'llm.serve' or 'status'."""
     return f"{spec['domain']}.{spec['subcommand']}" if spec.get("subcommand") else spec["domain"]

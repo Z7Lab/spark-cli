@@ -34,14 +34,12 @@ _CONFIG = [
     {"key": "models_dir",   "default": "~/models",                               "env": "SPARK_MODELS_DIR",         "type": "str",  "init": True,  "help": "LLM models directory on the DGX"},
     {"key": "server_bin",   "default": "~/llama.cpp/build/bin/llama-server",     "env": "SPARK_SERVER_BIN",         "type": "str",  "init": True,  "help": "llama-server binary path"},
     {"key": "server_log",   "default": "~/llama-server.log",                     "env": "SPARK_SERVER_LOG",         "type": "str",  "init": True,  "help": "llama-server log file path"},
-    {"key": "venv",         "default": "~/llama-cpp-venv",                       "env": "SPARK_VENV",               "type": "str",  "init": False, "help": "Python venv for llama tooling"},
-    {"key": "hf_dl",        "default": "~/hf_download.py",                       "env": "SPARK_HF_DL",              "type": "str",  "init": False, "help": "hf_download.py path on the DGX"},
+    {"key": "remote_bin",   "default": "~",                                      "env": "SPARK_REMOTE_BIN",         "type": "str",  "init": False, "help": "DGX dir for spark's bundled scripts (hf_download.py, tts_gen.py)"},
     {"key": "port",         "default": 30000,                                    "env": "SPARK_PORT",               "type": "int",  "init": True,  "help": "Base port for llama-server (first model)"},
     {"key": "mem_reserve_gb", "default": 8,                                      "env": "SPARK_MEM_RESERVE_GB",     "type": "int",  "init": False, "help": "Free-memory headroom (GB) the serve fit-check keeps"},
     {"key": "comfy_dir",    "default": "~/comfyui-aeon-spark",                   "env": "SPARK_COMFY_DIR",          "type": "str",  "init": False, "help": "ComfyUI install dir on the DGX"},
     {"key": "comfy_port",   "default": 8188,                                     "env": "SPARK_COMFY_PORT",         "type": "int",  "init": False, "help": "ComfyUI HTTP port"},
     {"key": "tts_venv",     "default": "~/venvs/qwen-tts",                        "env": "SPARK_TTS_VENV",           "type": "str",  "init": False, "help": "Python venv running qwen-tts on the DGX"},
-    {"key": "tts_gen",      "default": "~/tts_gen.py",                            "env": "SPARK_TTS_GEN",            "type": "str",  "init": False, "help": "tts_gen.py path on the DGX"},
     {"key": "whisper_bin",  "default": "~/whisper.cpp/build/bin/whisper-server", "env": "SPARK_WHISPER_BIN",        "type": "str",  "init": False, "help": "whisper-server binary path"},
     {"key": "whisper_log",  "default": "~/whisper-server.log",                   "env": "SPARK_WHISPER_LOG",        "type": "str",  "init": False, "help": "whisper-server log file path"},
     {"key": "whisper_models_dir", "default": "~/whisper.cpp/models",            "env": "SPARK_WHISPER_MODELS_DIR", "type": "str",  "init": False, "help": "Whisper ggml models directory"},
@@ -86,6 +84,13 @@ def load_config() -> dict:
             print(red(f"Config is not valid JSON ({CONFIG_PATH}): {e}"), file=sys.stderr)
             sys.exit(1)
     return cfg
+
+
+def remote_script(cfg, name):
+    """Where a bundled script (e.g. 'hf_download.py') lives on the DGX: derived
+    as `{remote_bin}/{name}` so the on-box basename always tracks the repo file
+    and a rename can't drift."""
+    return f"{cfg['remote_bin'].rstrip('/')}/{name}"
 
 # ── Colors ────────────────────────────────────────────────────────────────────
 
@@ -399,9 +404,10 @@ def _run_pull(cfg, jobs, done_hint=""):
         return
 
     local_engine = REPO_ROOT / "bin" / "hf_download.py"
-    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{cfg['hf_dl']}"))
+    remote_dl = remote_script(cfg, "hf_download.py")
+    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{remote_dl}"))
     if subprocess.run(["scp", "-q", str(local_engine),
-                       f"{cfg['dgx_user']}@{cfg['dgx_host']}:{cfg['hf_dl']}"]).returncode != 0:
+                       f"{cfg['dgx_user']}@{cfg['dgx_host']}:{remote_dl}"]).returncode != 0:
         print(fail("Could not deploy the downloader to the DGX (scp failed)."))
         sys.exit(1)
 
@@ -414,7 +420,7 @@ def _run_pull(cfg, jobs, done_hint=""):
 
     def _cmd(i, j):
         c = (f"echo '[{i}/{n}] {j['label']}' && "
-             f"python3 {cfg['hf_dl']} {j['repo']} {j['dest']} '{j['glob']}'" + (" --flat" if j.get("flat") else ""))
+             f"python3 {remote_dl} {j['repo']} {j['dest']} '{j['glob']}'" + (" --flat" if j.get("flat") else ""))
         if j.get("rename"):  # repos with generic filenames (e.g. diffusion_pytorch_model.safetensors)
             c += f" && mv -f {j['dest']}/{Path(j['glob']).name} {j['dest']}/{j['rename']}"
         return c

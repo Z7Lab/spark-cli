@@ -2,7 +2,8 @@
 
 `say` syncs the bundled generator (`bin/tts_gen.py`) to the DGX, runs it in
 the qwen-tts venv against the catalog model, and copies the .wav back. `pull_models`
-fetches the model. Paths come from config (`tts_venv`, `tts_gen`), not hardcoded.
+fetches the model. The venv comes from config (`tts_venv`); the generator's on-box
+path is derived from `remote_bin` (see sparkcore.remote_script), not hardcoded.
 """
 
 from __future__ import annotations
@@ -14,7 +15,7 @@ from pathlib import Path
 
 from sparkcore import (
     REPO_ROOT, dim, cyan, ok, fail,
-    ssh, _models_catalog, _run_pull,
+    ssh, _models_catalog, _run_pull, remote_script,
 )
 
 
@@ -56,13 +57,14 @@ def say(params, cfg):
 
     # Sync the generator engine to the DGX (same pattern as the downloader).
     engine = REPO_ROOT / "bin" / "tts_gen.py"
+    remote_gen = remote_script(cfg, "tts_gen.py")
     if subprocess.run(["scp", "-q", str(engine),
-                       f"{cfg['dgx_user']}@{cfg['dgx_host']}:{cfg['tts_gen']}"]).returncode != 0:
+                       f"{cfg['dgx_user']}@{cfg['dgx_host']}:{remote_gen}"]).returncode != 0:
         print(fail("Could not deploy the TTS generator to the DGX (scp failed)."))
         sys.exit(1)
 
     remote_wav = "/tmp/spark_tts_out.wav"
-    cmd = (f"{shlex.quote(cfg['tts_venv'])}/bin/python {shlex.quote(cfg['tts_gen'])} "
+    cmd = (f"{shlex.quote(cfg['tts_venv'])}/bin/python {shlex.quote(remote_gen)} "
            f"--model {shlex.quote(model_dir)} --text {shlex.quote(text)} "
            f"--out {remote_wav} --speaker {shlex.quote(params['speaker'])} "
            f"--instruct {shlex.quote(params['instruct'])} "
