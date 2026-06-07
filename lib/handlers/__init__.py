@@ -12,10 +12,10 @@ ref (e.g. "llm.serve") to its function; this package merges them into REGISTRY.
 
 from __future__ import annotations
 
-from . import core, llm, comfy, transcribe, playbook, image
+from . import core, llm, comfy, transcribe, playbook, image, tts
 
 REGISTRY: dict = {}
-for _mod in (core, llm, comfy, transcribe, playbook, image):
+for _mod in (core, llm, comfy, transcribe, playbook, image, tts):
     REGISTRY.update(_mod.HANDLERS)
 
 

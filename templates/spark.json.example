@@ -10,6 +10,8 @@
   "mem_reserve_gb": 8,
   "comfy_dir": "~/comfyui-aeon-spark",
   "comfy_port": 8188,
+  "tts_venv": "~/venvs/qwen-tts",
+  "tts_gen": "~/tts_gen.py",
   "whisper_bin": "~/whisper.cpp/build/bin/whisper-server",
   "whisper_log": "~/whisper-server.log",
   "whisper_models_dir": "~/whisper.cpp/models",

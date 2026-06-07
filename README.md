@@ -6,7 +6,7 @@ The canonical interface for anything running on the Spark — agents should use 
 ## Prerequisites
 
 - **SSH access** to a DGX Spark (GB10) host — `spark` manages the remote host entirely over SSH, so the DGX must be reachable and your key trusted before `spark init`.
-- **Remote services** must be set up on the DGX before the corresponding `spark` commands will work: `llama-server` (for `spark llm`), a running ComfyUI container (for `spark comfy`), and `whisper-server` (for `spark transcribe`). See [docs/secure-deployment.md](docs/secure-deployment.md) for the recommended DGX setup.
+- **Remote services** must be set up on the DGX before the corresponding `spark` commands will work: `llama-server` (for `spark llm`), a running ComfyUI container (for `spark comfy`), `whisper-server` (for `spark transcribe`), and a `qwen-tts` Python venv (for `spark tts`). See [docs/secure-deployment.md](docs/secure-deployment.md) for the recommended DGX setup.
 - **Python 3** on your workstation (stdlib only — no pip installs, no venv).
 
 ## Setup
@@ -49,6 +49,11 @@ spark comfy pull-models [--set generate|animate|qr-art|all]  Download the models
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
 spark transcribe pull-models [--model M|--all]    Download whisper ggml model(s)
+
+# Speech synthesis (TTS)
+spark tts say "<text>" [--out F --speaker V --instruct "..." --language L]
+                                                  Synthesize speech (Qwen3-TTS), downloads the .wav
+spark tts pull-models                             Download the Qwen3-TTS model
 
 # Model downloads
 spark llm pull-models [<name>...|--all]           Download catalog LLM model(s) (lists sizes if no args)
@@ -107,7 +112,7 @@ Point a client at it:
 `spark _schema [name]` prints the same tool schemas for inspection.
 
 Models for each service are listed in an editable catalog,
-`templates/models.json` (sections: `comfy`, `whisper`, `llm`). The `llm` section lists large MoE models validated for the GB10's
+`templates/models.json` (sections: `comfy`, `tts`, `whisper`, `llm`). The `llm` section lists large MoE models validated for the GB10's
 128 GB unified memory in Unsloth Dynamic (UD) quants — each entry carries the quant,
 footprint, and rationale (run `spark llm pull-models` to see them). Edit freely.
 
@@ -237,6 +242,22 @@ Endpoint: `http://gx10-<id>.local:8081/v1/audio/transcriptions`
 Point any OpenAI-compatible client at it (e.g. mdkb: `audio_provider=remote`, `audio_api_base=http://gx10-<id>.local:8081`).
 
 > whisper.cpp has no native OpenAI route — `spark transcribe start` launches it with `--inference-path /v1/audio/transcriptions` so its inference handler answers there. Only that path is implemented (no `/v1/models`), and the default `json` response is OpenAI-shaped; other formats follow whisper.cpp's schema.
+
+## Speech synthesis (TTS)
+
+Qwen3-TTS, run in a `qwen-tts` Python venv on the DGX — entirely on-box, no cloud,
+no host install. `spark tts say` syncs the bundled generator, synthesizes on the
+box, and copies the `.wav` back to your workstation.
+
+```bash
+spark tts pull-models                       # one-time: fetch the model into models_dir
+spark tts say "There's no place like my volcano." --out bowser.wav \
+  --speaker Ryan --instruct "deep gruff gravelly menacing monster-king growl"
+```
+
+`--speaker` picks a built-in voice and `--instruct` steers tone/emotion in plain
+language; `--language` sets the text language (default English). The model comes
+from the catalog's `tts` section — pull it once before the first `say`.
 
 ## Downloading models
 

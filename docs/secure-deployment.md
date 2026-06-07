@@ -71,6 +71,10 @@ in this repo, so copy it from your workstation:
 scp bin/hf_download.py svc-spark@<host>:/opt/spark/bin/hf_download.py
 ```
 
+For `spark tts`, also create the `qwen-tts` Python venv at `tts_venv` (with the
+`qwen_tts` package + torch) — `spark tts say` scp's `bin/tts_gen.py` to `tts_gen`
+automatically on each run, so only the venv needs to pre-exist.
+
 Then re-point spark's configurable paths in `~/.config/spark.json` — **no CLI code
 change is needed** (see the config table in the repo README):
 
@@ -82,6 +86,8 @@ change is needed** (see the config table in the repo README):
   "server_bin":         "/opt/spark/llama.cpp/build/bin/llama-server",
   "server_log":         "/opt/spark/logs/llama-server.log",
   "comfy_dir":          "/opt/spark/comfyui",
+  "tts_venv":           "/opt/spark/venvs/qwen-tts",
+  "tts_gen":            "/opt/spark/bin/tts_gen.py",
   "whisper_bin":        "/opt/spark/whisper.cpp/build/bin/whisper-server",
   "whisper_log":        "/opt/spark/logs/whisper-server.log",
   "whisper_models_dir": "/opt/spark/whisper.cpp/models",

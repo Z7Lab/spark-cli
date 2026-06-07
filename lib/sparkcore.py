@@ -40,6 +40,8 @@ _CONFIG = [
     {"key": "mem_reserve_gb", "default": 8,                                      "env": "SPARK_MEM_RESERVE_GB",     "type": "int",  "init": False, "help": "Free-memory headroom (GB) the serve fit-check keeps"},
     {"key": "comfy_dir",    "default": "~/comfyui-aeon-spark",                   "env": "SPARK_COMFY_DIR",          "type": "str",  "init": False, "help": "ComfyUI install dir on the DGX"},
     {"key": "comfy_port",   "default": 8188,                                     "env": "SPARK_COMFY_PORT",         "type": "int",  "init": False, "help": "ComfyUI HTTP port"},
+    {"key": "tts_venv",     "default": "~/venvs/qwen-tts",                        "env": "SPARK_TTS_VENV",           "type": "str",  "init": False, "help": "Python venv running qwen-tts on the DGX"},
+    {"key": "tts_gen",      "default": "~/tts_gen.py",                            "env": "SPARK_TTS_GEN",            "type": "str",  "init": False, "help": "tts_gen.py path on the DGX"},
     {"key": "whisper_bin",  "default": "~/whisper.cpp/build/bin/whisper-server", "env": "SPARK_WHISPER_BIN",        "type": "str",  "init": False, "help": "whisper-server binary path"},
     {"key": "whisper_log",  "default": "~/whisper-server.log",                   "env": "SPARK_WHISPER_LOG",        "type": "str",  "init": False, "help": "whisper-server log file path"},
     {"key": "whisper_models_dir", "default": "~/whisper.cpp/models",            "env": "SPARK_WHISPER_MODELS_DIR", "type": "str",  "init": False, "help": "Whisper ggml models directory"},
