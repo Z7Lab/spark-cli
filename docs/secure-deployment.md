@@ -190,6 +190,12 @@ Own the supply chain — all four layers:
 4. **Custom-node allowlist** — ComfyUI custom nodes run arbitrary Python in-process;
    allowlist them, pin to commits, review before install, no arbitrary runtime
    installs.
+5. **Pin the from-source engines** — llama.cpp (and whisper.cpp) are pinned in
+   `templates/engines.json` to a commit **plus build provenance** (the cmake flags;
+   a `BUILD_SHARED_LIBS` flip is as breaking as a code change). `spark engine status`
+   flags drift from the pin; `spark engine build <name>` rebuilds reproducibly from
+   it, moving the pin only on an explicit `--ref`/`--latest`. Same "deliberate re-pin,
+   never silent" rule as the image digest-pin above.
 
 ---
 

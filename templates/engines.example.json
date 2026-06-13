@@ -1,0 +1,14 @@
+{
+  "_comment": "Pinned build specs for the inference engines spark runs on the DGX. Mirrors models.example.json: this tracked file seeds the gitignored templates/engines.json (the runtime copy `spark engine` reads). The pin is the COMMIT + BUILD PROVENANCE (cmake flags) — what broke serving was BUILD_SHARED_LIBS=ON, not the hash, so the flags are part of the pin. `spark engine status` flags drift from the pin; `spark engine build <name>` rebuilds from it. Move a pin deliberately with --ref/--latest (re-validate after). Install PATHS live in spark.json (server_bin etc.), referenced here by path_key.",
+
+  "llama": {
+    "repo": "https://github.com/ggml-org/llama.cpp",
+    "branch": "master",
+    "commit": "1738129bee5c81b06fa1850daf3f958813c76f5f",
+    "cmake_flags": ["-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=121", "-DBUILD_SHARED_LIBS=ON", "-DGGML_NATIVE=ON", "-DCMAKE_BUILD_TYPE=Release"],
+    "path_key": "server_bin",
+    "binary": "build/bin/llama-server",
+    "validated": "Qwen3.6-35B-A3B Q5 ~60.9 t/s (2026-06-08, build 9426)",
+    "label": "llama.cpp llama-server — GB10/sm_121, shared-lib (ggml dynamic backends) build"
+  }
+}

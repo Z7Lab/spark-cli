@@ -13,6 +13,7 @@ from sparkcore import (
     ssh, ssh_screen,
     _llm_instances, _parse_quant, _quant_glob, _du_bytes, _free_bytes,
     _kv_cache_bytes, _comfy_mem_bytes, _human, _port_log, _models_catalog, _run_pull,
+    _engine_state,
 )
 
 
@@ -72,6 +73,16 @@ def serve(params, cfg):
         model_path = entry_files[0]
 
     quant = _parse_quant(Path(model_path).name)
+
+    # Best-effort: flag if llama.cpp drifted from its pin (an out-of-band rebuild
+    # is what broke serving before). Informational — never blocks the load.
+    try:
+        st = _engine_state(cfg, "llama")
+        if st and st["state"] == "drifted":
+            print(warn(f"llama.cpp drifted from pin (installed {st['installed'][:12]} ≠ "
+                       f"pinned {st['pinned'][:12]}) — {cyan('spark engine status')}"))
+    except Exception:
+        pass
 
     # Each model runs as its own llama-server on its own port — never evict
     # another model implicitly. The live processes are the registry.

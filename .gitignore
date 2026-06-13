@@ -30,3 +30,6 @@ __pycache__/
 secrets/
 credentials/
 config.local.*
+
+# Runtime engine catalog — seeded from templates/engines.example.json on first use.
+templates/engines.json

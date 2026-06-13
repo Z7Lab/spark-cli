@@ -62,6 +62,10 @@ spark download <repo> <name> <pattern>            Download a single model from H
 spark queue <repo> <name> <pattern> [...]         Queue multiple downloads sequentially
 spark logs-dl                                     Tail the download queue log
 
+# Inference engines (pinned builds)
+spark engine status [<engine>]                    Installed commit vs pin (drift)
+spark engine build <engine> [--ref X|--latest]    Rebuild from the pin (or move it)
+
 # Local image compositing (requires Pillow)
 spark image detect-region <img> [--search-box ...] Print the bbox of the main object
 spark image extract-asset <img> --bbox ... --out   Crop a sub-image
@@ -284,6 +288,25 @@ spark logs-dl
 For the concrete model names required by each `spark comfy` workflow (FLUX.2, LTX-2.3
 i2v, etc.) and their HuggingFace sources, see the **Models** table in
 [docs/media-workflows.md](docs/media-workflows.md#models).
+
+## Engines (pinned builds)
+
+The inference engines spark runs on the DGX (llama.cpp; whisper.cpp later) are
+pinned in `templates/engines.json` to a **commit + build provenance** — the cmake
+flags are part of the pin, because a build-config change (e.g. `BUILD_SHARED_LIBS`)
+can break things just as much as a code change. This is the build-from-source analog
+of the digest-pin used for the ComfyUI image.
+
+```bash
+spark engine status                 # installed commit vs pin, per engine (drift check)
+spark engine build llama            # rebuild from the pin, then validate it launches
+spark engine build llama --latest   # deliberately move to upstream HEAD, then re-pin
+```
+
+`status` catches an out-of-band rebuild (someone ran `git pull` + rebuilt) before it
+surprises you at serve time — `spark llm serve` also prints a one-line warning if the
+engine has drifted. `build` is reproducible (same pin + flags → same binary) and
+re-records the pin only when you deliberately move it with `--ref`/`--latest`.
 
 ## Troubleshooting
 

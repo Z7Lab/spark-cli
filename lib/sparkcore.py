@@ -421,6 +421,50 @@ def _models_catalog():
     return json.loads(MODELS_PATH.read_text()), MODELS_PATH
 
 
+ENGINES_PATH = REPO_ROOT / "templates" / "engines.json"
+ENGINES_EXAMPLE = REPO_ROOT / "templates" / "engines.example.json"
+
+
+def _engines_catalog():
+    """Load the engine pin catalog (templates/engines.json), seeding it from the
+    tracked example on first use. Returns (catalog_dict, path)."""
+    if not ENGINES_PATH.exists():
+        ENGINES_PATH.write_text(ENGINES_EXAMPLE.read_text())
+    return json.loads(ENGINES_PATH.read_text()), ENGINES_PATH
+
+
+def _engine_source_dir(entry: dict, cfg: dict):
+    """The engine's source checkout dir, derived from its configured binary path
+    (cfg[path_key] minus the catalog's `binary` suffix). None for a custom layout."""
+    binpath = cfg.get(entry.get("path_key", ""), "")
+    suffix = entry.get("binary", "")
+    if binpath and suffix and binpath.endswith(suffix):
+        return binpath[: -len(suffix)].rstrip("/")
+    return None
+
+
+def _engine_state(cfg: dict, name: str):
+    """Compare an engine's installed checkout to its pin. Returns a dict
+    {name, state, installed, pinned, src} or None if the engine isn't in the
+    catalog. state ∈ in-sync | drifted | no-git | no-layout. One cheap ssh."""
+    catalog, _ = _engines_catalog()
+    entry = catalog.get(name)
+    if not isinstance(entry, dict):
+        return None
+    import shlex
+    pinned = entry.get("commit", "")
+    src = _engine_source_dir(entry, cfg)
+    if not src:
+        return {"name": name, "state": "no-layout", "installed": "", "pinned": pinned, "src": None}
+    installed = ssh(cfg, f"git -C {shlex.quote(src)} rev-parse HEAD 2>/dev/null || true").strip()
+    if not installed:
+        return {"name": name, "state": "no-git", "installed": "", "pinned": pinned, "src": src}
+    # Pin may be a full or short sha; match on common prefix.
+    synced = bool(pinned) and (installed.startswith(pinned) or pinned.startswith(installed[:12]))
+    return {"name": name, "state": "in-sync" if synced else "drifted",
+            "installed": installed, "pinned": pinned, "src": src}
+
+
 def _run_pull(cfg, jobs, done_hint=""):
     """Pull a list of download jobs with the bundled hf_download.py.
 
