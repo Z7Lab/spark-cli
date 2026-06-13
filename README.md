@@ -6,7 +6,7 @@ The canonical interface for anything running on the Spark — agents should use 
 ## Prerequisites
 
 - **SSH access** to a DGX Spark (GB10) host — `spark` manages the remote host entirely over SSH, so the DGX must be reachable and your key trusted before `spark init`.
-- **Remote services** must be set up on the DGX before the corresponding `spark` commands will work: `llama-server` (for `spark llm`), a running ComfyUI container (for `spark comfy`), `whisper-server` (for `spark transcribe`), and a `qwen-tts` Python venv (for `spark tts`). See [docs/secure-deployment.md](docs/secure-deployment.md) for the recommended DGX setup.
+- **Remote services** must be set up on the DGX before the corresponding `spark` commands will work: `llama-server` (for `spark llm`), a running ComfyUI container (for `spark comfy`), `whisper-server` (for `spark transcribe`), and a `qwen-tts` Python venv (for `spark tts`). **[docs/install.md](docs/install.md)** is the from-scratch setup (build the pinned engines, venv, models); **[docs/secure-deployment.md](docs/secure-deployment.md)** then hardens it.
 - **Python 3** on your workstation (stdlib only — no pip installs, no venv).
 
 ## Setup
@@ -120,6 +120,7 @@ Models for each service are listed in an editable catalog,
 `templates/models.json` (sections: `comfy`, `tts`, `whisper`, `llm`). The `llm` section lists large MoE models validated for the GB10's
 128 GB unified memory in Unsloth Dynamic (UD) quants — each entry carries the quant,
 footprint, and rationale (run `spark llm pull-models` to see them). Edit freely.
+Measured generation speed (tok/s) for each on the GB10: **[docs/benchmarks.md](docs/benchmarks.md)**.
 
 ## LLM serving
 
@@ -175,46 +176,20 @@ Chat UI (built-in, no install): `http://gx10-<id>.local:30000` (or `spark llm op
 
 ## Image and video generation (ComfyUI)
 
-AEON-Spark — pre-built Docker image for GB10 (handles sm_121 / UMA / Blackwell correctly).
+AEON-Spark — a pre-built Docker image for GB10 (handles sm_121 / UMA / Blackwell).
+Manage the container, then generate/animate from the CLI — jobs hit ComfyUI's HTTP
+API and the output downloads to your workstation:
 
 ```bash
-spark comfy start     # pulls and starts via docker compose
-spark comfy status    # shows UI URL when ready
-spark comfy queue     # running + pending render jobs (what's rendering now)
-spark comfy stop
-spark comfy logs
+spark comfy start                                    # start (docker compose) — status/stop/logs/queue too
+spark comfy pull-models [--set generate|animate]     # fetch the FLUX.2 / LTX-2.3 models (once)
+spark comfy generate "a red fox in a snowy forest"   # FLUX.2 text-to-image → PNG
+spark comfy animate fox.png "the fox leaps and runs" # LTX-2.3 image-to-video → MP4
 ```
 
-UI at: `http://gx10-<id>.local:8188`
-
-**First, the models** — `spark comfy pull-models` downloads everything `generate`
-and `animate` need (from the runtime model catalog `templates/models.json`, via the
-bundled downloader) into ComfyUI's models dir on the DGX. `--set generate` or
-`--set animate` pulls just one. Resume-safe; all repos are public.
-
-**Generate from the CLI** — `spark comfy generate` submits a FLUX.2 text-to-image
-job to the ComfyUI API and downloads the PNG to your workstation:
-
-```bash
-spark comfy generate "a red fox in a snowy forest at dawn"
-spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
-```
-
-Options: `--width --height --steps --guidance --seed --out --model --encoder --vae`.
-First run loads the models into the GB10's unified memory (a few minutes); after
-that, gens take ~30–60 s.
-
-**Animate a still → video** — `spark comfy animate` runs the LTX-2.3
-image-to-video pipeline (upload still → motion → MP4 downloaded locally):
-
-```bash
-spark comfy animate fox.png "the fox leaps and runs through the snow"
-spark comfy animate portrait.jpg "slow cinematic push-in, hair drifting" --out clip.mp4
-```
-
-Options: `--seed --out`. Requires the LTX-2.3 models on the DGX (FP8 checkpoint +
-Gemma encoder + distilled LoRA + upscaler). The i2v run takes a few minutes (22B
-model, two-stage sample + upscale + decode).
+UI at `http://gx10-<id>.local:8188`. First run loads the models into unified memory
+(a few minutes); after that image gens take ~30–60 s, i2v a few minutes. Run
+`spark comfy <cmd> --help` for the full flag set.
 
 📖 **[docs/media-workflows.md](docs/media-workflows.md)** — full guide: image gen,
 animation, the **cut-out → composite → animate** recipe (fly a character onto
