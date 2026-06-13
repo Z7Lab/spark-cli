@@ -285,6 +285,35 @@ def _free_bytes(cfg: dict) -> int:
         return 0
 
 
+_MEM_UNITS = {"b": 1, "kib": 1024, "kb": 1024, "mib": 1024**2, "mb": 1024**2,
+              "gib": 1024**3, "gb": 1024**3, "tib": 1024**4, "tb": 1024**4}
+
+
+def _parse_mem(s: str) -> int:
+    """Parse a docker-stats size like '12.3GiB' or '512MiB' into bytes (0 if unparseable)."""
+    import re
+    m = re.match(r"\s*([\d.]+)\s*([a-zA-Z]+)", s or "")
+    if not m:
+        return 0
+    return int(float(m.group(1)) * _MEM_UNITS.get(m.group(2).lower(), 0))
+
+
+def _comfy_mem_bytes(cfg: dict) -> int:
+    """Resident memory (bytes) of the running ComfyUI container, or 0 if it isn't up.
+
+    The unified memory is shared across services, so a loaded ComfyUI (FLUX/LTX
+    weights resident) directly shrinks what an LLM can use. The LLM fit-check reads
+    this to attribute a shortfall to comfy and point at `spark comfy stop`."""
+    name = ssh(cfg, _docker_env(cfg)
+               + "docker ps --filter name=comfy --format '{{.Names}}' 2>/dev/null | head -1").strip()
+    if not name:
+        return 0
+    import shlex
+    raw = ssh(cfg, _docker_env(cfg) + f"docker stats --no-stream --format "
+              f"'{{{{.MemUsage}}}}' {shlex.quote(name)} 2>/dev/null")
+    return _parse_mem(raw.split("/")[0])  # "12.3GiB / 120GiB" → used side
+
+
 # Minimal GGUF metadata reader — reads only the KV header (seeks past tensor data
 # and large arrays) to recover the dims needed for a KV-cache estimate. Self-
 # contained so the fit-check never depends on gguf-py / llama tooling being

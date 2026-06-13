@@ -12,7 +12,7 @@ from sparkcore import (
     bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen,
     _llm_instances, _parse_quant, _quant_glob, _du_bytes, _free_bytes,
-    _kv_cache_bytes, _human, _port_log, _models_catalog, _run_pull,
+    _kv_cache_bytes, _comfy_mem_bytes, _human, _port_log, _models_catalog, _run_pull,
 )
 
 
@@ -97,27 +97,42 @@ def serve(params, cfg):
 
     # Deterministic fit check — refuse rather than silently evict. The estimate is
     # weights (on disk) + KV cache (from GGUF dims, scales with ctx×parallel), and
-    # must leave a reserve margin free for the OS and co-running services.
+    # must leave a reserve margin free for the OS and co-running services. The
+    # unified memory is shared, so ComfyUI's resident weights count against us too;
+    # we surface that and let the user opt into freeing it with --free-comfy (never
+    # automatic — same "no silent eviction" rule as for other models).
     weights = _du_bytes(cfg, _quant_glob(model_path, quant))
     kv      = _kv_cache_bytes(cfg, model_path, ctx, par)
+    kv_est  = kv or int(weights * 0.15)   # conservative fallback when GGUF dims unreadable
     reserve = int(cfg.get("mem_reserve_gb", 8)) * 1024**3
-    needed  = weights + kv
+    needed  = weights + kv_est
     avail   = _free_bytes(cfg)
-    if needed and avail and needed + reserve > avail:
-        kv_part = f" + ~{_human(kv)} KV @ ctx {ctx}×{par}" if kv else ""
-        print(fail(f"{name} {quant} needs ~{_human(needed)} "
-                   f"(~{_human(weights)} weights{kv_part}) plus a {_human(reserve)} "
-                   f"reserve, but only {_human(avail)} is free."))
-        if instances:
-            print(dim("  Resident models (unload some to make room):"))
-            for inst in instances:
-                sz   = _human(_du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"])))
-                hint = dim(f"spark llm unload --port {inst['port']}")
-                print(f"    :{inst['port']}  {cyan(inst['name'])} {dim(inst['quant'])}  {sz}   {hint}")
-        if not kv:
-            print(dim("  (KV cache could not be estimated; weights + reserve only)"))
-        print(dim("  Free memory, lower --ctx/--parallel, or adjust mem_reserve_gb."))
-        sys.exit(1)
+    if needed and avail:
+        comfy_mem = _comfy_mem_bytes(cfg) if needed + reserve > avail else 0
+        if needed + reserve > avail and params["free_comfy"] and comfy_mem:
+            print(warn(f"Freeing ComfyUI (~{_human(comfy_mem)}) to make room "
+                       f"({cyan('--free-comfy')})..."))
+            from . import comfy as _comfy
+            _comfy.stop({}, cfg)
+            time.sleep(2)
+            avail, comfy_mem = _free_bytes(cfg), 0
+        if needed + reserve > avail:
+            kv_part = f" + ~{_human(kv_est)} KV @ ctx {ctx}×{par}" + ("" if kv else " est.")
+            print(fail(f"{name} {quant} needs ~{_human(needed)} "
+                       f"(~{_human(weights)} weights{kv_part}) plus a {_human(reserve)} "
+                       f"reserve, but only {_human(avail)} is free."))
+            if instances:
+                print(dim("  Resident models (unload some to make room):"))
+                for inst in instances:
+                    sz   = _human(_du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"])))
+                    hint = dim(f"spark llm unload --port {inst['port']}")
+                    print(f"    :{inst['port']}  {cyan(inst['name'])} {dim(inst['quant'])}  {sz}   {hint}")
+            if comfy_mem:
+                print(f"    {cyan('ComfyUI')} is holding ~{_human(comfy_mem)} — free it: "
+                      + cyan('spark comfy stop') + dim(", or re-run with ")
+                      + cyan('--free-comfy'))
+            print(dim("  Free memory, lower --ctx/--parallel, or adjust mem_reserve_gb."))
+            sys.exit(1)
 
     session = f"llama-{port}"
     log_path = _port_log(cfg, port)
@@ -304,6 +319,84 @@ def open_ui(params, cfg):
     return {"action": "llm.open", "port": int(port), "url": url}
 
 
+def bench(params, cfg):
+    """Measure a loaded model's generation speed (tokens/sec) over its API."""
+    import json as _json
+    import urllib.request
+
+    instances = _llm_instances(cfg)
+    if not instances:
+        print(fail("No model loaded. Serve one first: ")
+              + cyan("spark llm serve <model>"))
+        sys.exit(1)
+
+    port, name = params["port"], params["model"]
+    if port:
+        matches = [i for i in instances if i["port"] == str(port)]
+    elif name:
+        matches = [i for i in instances if name.lower() in i["name"].lower()]
+    elif len(instances) == 1:
+        matches = instances
+    else:
+        print(fail("Multiple models loaded — specify <model> or --port:"))
+        for i in instances:
+            print(f"    --port {i['port']}  {cyan(i['name'])} {dim(i['quant'])}")
+        sys.exit(1)
+    if not matches:
+        print(fail("No loaded model matches that name/port."))
+        print(f"  Run {cyan('spark llm list')} to see what's loaded.")
+        sys.exit(1)
+
+    inst = matches[0]
+    bport = inst["port"]
+    prompt, max_tokens, runs = params["prompt"], params["max_tokens"], params["runs"]
+    url = f"http://{cfg['dgx_host']}:{bport}/v1/chat/completions"
+
+    print(bold(f"Benchmarking {inst['name']} {cyan(inst['quant'])} on port {bport}"))
+    print(dim(f"  prompt: {prompt!r}  ·  max_tokens={max_tokens}  ·  runs={runs}\n"))
+
+    rates = []
+    for r in range(1, runs + 1):
+        body = _json.dumps({
+            "model": inst["name"],
+            "messages": [{"role": "user", "content": prompt}],
+            "max_tokens": max_tokens, "stream": False, "temperature": 0.7,
+        }).encode()
+        req = urllib.request.Request(url, data=body,
+                                     headers={"Content-Type": "application/json"})
+        t0 = time.time()
+        try:
+            with urllib.request.urlopen(req, timeout=900) as resp:
+                data = _json.loads(resp.read())
+        except Exception as e:
+            print(fail(f"Request failed: {e}"))
+            print(f"  Is the server ready? {cyan('spark llm logs --port ' + str(bport))}")
+            sys.exit(1)
+        wall = time.time() - t0
+
+        # llama.cpp server reports precise gen-only timings; fall back to wall-clock.
+        tm = data.get("timings") or {}
+        toks = tm.get("predicted_n") or data.get("usage", {}).get("completion_tokens")
+        if tm.get("predicted_per_second"):
+            tps, gen_s = tm["predicted_per_second"], tm.get("predicted_ms", 0) / 1000
+            src = "server"
+        else:
+            gen_s, tps = wall, (toks / wall if toks else None)
+            src = "wall"
+        rates.append(tps)
+        tps_str = f"{tps:.2f} t/s" if tps else "n/a"
+        print(f"  run {r}/{runs}  {bold(tps_str)}  "
+              + dim(f"({toks} tok in {gen_s:.1f}s, {src})"))
+
+    valid = [x for x in rates if x]
+    avg = sum(valid) / len(valid) if valid else None
+    if avg and runs > 1:
+        print(ok(f"\n  mean {avg:.2f} t/s over {len(valid)} run(s)"))
+    return {"action": "llm.bench", "model": inst["name"], "quant": inst["quant"],
+            "port": int(bport), "prompt": prompt, "runs": runs,
+            "tps": rates, "tps_mean": avg}
+
+
 def pull_models(params, cfg):
     """Download catalog LLM model(s) into models_dir, one dir per model."""
     catalog, src = _models_catalog()
@@ -339,6 +432,7 @@ def pull_models(params, cfg):
 
 HANDLERS = {
     "llm.serve":       serve,
+    "llm.bench":       bench,
     "llm.list":        ls,
     "llm.unload":      unload,
     "llm.stop":        stop,

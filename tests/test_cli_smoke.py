@@ -56,13 +56,26 @@ class TestCli(unittest.TestCase):
             self.assertIn("Usage:", r.stdout, f"{argv} help missing usage")
 
     def test_grouped_domain_help_lists_subcommands(self):
+        # `<domain> --help` always shows the subcommand menu — even for domains
+        # with a default subcommand, where bare `<domain>` runs that default.
         for domain, group in self.routing.items():
             if not manifest.is_grouped(group):
                 continue
-            r = run(domain)
+            r = run(domain, "--help")
             self.assertEqual(r.returncode, 0, r.stderr)
             for sub in (s for s in group if s):
                 self.assertIn(sub, r.stdout, f"{domain} help missing {sub}")
+
+    def test_default_subcommand_runs_on_bare_invocation(self):
+        # A grouped domain that declares a default sub (e.g. config -> show) runs
+        # it on bare `<domain>` instead of printing the menu; --help still lists subs.
+        for domain, group in self.routing.items():
+            default = manifest.default_subcommand(group)
+            if default is None:
+                continue
+            self.assertEqual(run(domain).returncode, 0,
+                             f"{domain} bare invocation should run its default sub")
+            self.assertIn(default, run(domain, "--help").stdout)
 
     def test_unknown_command(self):
         r = run("definitely-not-a-command")

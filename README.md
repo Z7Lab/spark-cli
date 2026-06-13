@@ -38,6 +38,7 @@ spark llm unload <name|--port N>                  Unload one model, free its mem
 spark llm stop                                    Stop ALL LLM servers at once
 spark llm logs [--port N] [--lines N]             Tail a server log
 spark llm open [--port N]                         Open built-in chat UI in browser
+spark llm bench [<model>] [--runs N]              Measure a loaded model's speed (tokens/sec)
 
 # Image / video generation
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
@@ -145,7 +146,9 @@ Loading never evicts another model behind your back. The fit check estimates
 **weights + KV cache** (the KV term is read from the model's GGUF dims and scales
 with `--ctx`/`--parallel`) and requires a free **reserve** on top (`mem_reserve_gb`,
 default 8). If it won't fit, `serve` **refuses** and lists what's resident so you
-can choose what to free — you stay in control of what gets unloaded:
+can choose what to free — you stay in control of what gets unloaded. The unified
+memory is shared with ComfyUI, so a loaded comfy can be why a model won't fit;
+`serve` surfaces that and offers `--free-comfy` to stop it first (never automatic):
 
 ```bash
 spark llm serve <large-model>
