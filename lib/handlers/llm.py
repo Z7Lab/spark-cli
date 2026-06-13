@@ -123,7 +123,13 @@ def serve(params, cfg):
     log_path = _port_log(cfg, port)
     print(f"Loading {bold(name)}  {cyan(quant)}  on port {port}...")
 
+    # Newer llama.cpp builds are split into shared libs (libllama-server-impl.so
+    # etc.) that ship beside the binary; the loader doesn't search a binary's own
+    # directory, so point LD_LIBRARY_PATH there or the server dies with
+    # "error while loading shared libraries". Harmless for self-contained builds.
+    lib_dir = str(Path(cfg["server_bin"]).parent)
     serve_cmd = (
+        f"LD_LIBRARY_PATH={lib_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}} "
         f"{cfg['server_bin']} "
         f"--model {model_path} "
         f"--port {port} --host 0.0.0.0 "
@@ -133,19 +139,29 @@ def serve(params, cfg):
     )
     ssh_screen(cfg, session, serve_cmd)
 
+    # Markers that mean the server will never come up — fail fast with the real
+    # cause instead of waiting out the full timeout (these can contain the word
+    # "loading", so match them explicitly rather than guessing from "error").
+    FATAL = ("error while loading shared libraries", "failed to load model",
+             "terminate called", "out of memory", "cudamalloc", "command not found")
     print(dim("Waiting for server to be ready..."))
     for i in range(90):
         time.sleep(2)
-        log = ssh(cfg, f"tail -3 {log_path} 2>/dev/null || true")
-        if "server is listening" in log:
+        log = ssh(cfg, f"tail -5 {log_path} 2>/dev/null || true")
+        low = log.lower()
+        if "server is listening" in low:
             print(f"\n  {ok('Model loaded and server ready')}")
             print(f"  API      http://{cfg['dgx_host']}:{port}/v1")
             chat_url = f"http://{cfg['dgx_host']}:{port}"
             print(f"  Chat UI  {cyan(chat_url)}  {dim('(open in browser)')}")
             return {"action": "llm.serve", "model": name, "quant": quant,
                     "port": port, "status": "ready"}
-        if "error" in log.lower() and "loading" not in log.lower():
-            print(fail(f"\nServer error — run: {cyan('spark llm logs')}"))
+        if any(m in low for m in FATAL):
+            bad = next((ln.strip() for ln in log.splitlines()
+                        if any(m in ln.lower() for m in FATAL)), log.strip())
+            print(fail(f"\nllama-server failed to start:"))
+            print(dim(f"  {bad}"))
+            print(f"  Full log: {cyan('spark llm logs --port ' + str(port))}")
             return {"action": "llm.serve", "model": name, "quant": quant,
                     "port": port, "status": "error"}
         print(f"\r  Loading... ({(i+1)*2}s)", end="", flush=True)
