@@ -39,6 +39,7 @@ spark llm stop                                    Stop ALL LLM servers at once
 spark llm logs [--port N] [--lines N]             Tail a server log
 spark llm open [--port N]                         Open built-in chat UI in browser
 spark llm bench [<model>] [--runs N]              Measure a loaded model's speed (tokens/sec)
+spark llm probe [<model>] [--serve --unload]      Verify tool-calling & prompt adherence (needs: pipx install llm-probe)
 
 # Image / video generation
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
@@ -312,7 +313,7 @@ Key design choices — each is intentional, not accidental:
 - **SSH-based remote management.** Every command shells out to `ssh user@host '...'`. No agent runs on the DGX; the DGX is managed like a remote host, not a peer.
 - **One `llama-server` process per model.** Each loaded model gets its own port. This makes unloading precise (kill one process, free exactly that model's VRAM), avoids a multiplexing router, and keeps port numbers as stable identifiers (`--port 30000` always means that one model).
 - **`screen` sessions for process persistence.** `llama-server` and `whisper-server` run in detached `screen` sessions so they outlive the SSH connection that started them.
-- **Zero Python dependencies.** `bin/spark`, the `lib/` package (manifest loader, parser, handlers), `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only (the `image` verbs alone need Pillow, gated behind a clear hint). The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
+- **Zero Python dependencies.** `bin/spark`, the `lib/` package (manifest loader, parser, handlers), `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only. The few capabilities that need more are **opt-in, never forced**: the `image` verbs need Pillow, and `spark llm probe` shells out to the external [`llm-probe`](https://pypi.org/project/llm-probe/) tool (`pipx install llm-probe`) — each gated behind a clear hint if absent, so users only install what they actually use. The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
 - **All service paths are configurable.** Every binary, log, and model directory is a config key in `~/.config/spark.json`. Relocating the whole stack (e.g. to `/opt/spark` under a `svc-spark` service account) is a config edit, not a code change.
 
 ## Config

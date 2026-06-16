@@ -441,9 +441,194 @@ def pull_models(params, cfg):
     return {"action": "llm.pull_models", "pulled": [m["name"] for m in chosen]}
 
 
+def probe(params, cfg):
+    """Verify a loaded model's capabilities via the external llm-probe tool.
+
+    Optional capability: spark shells out to the `llm-probe` CLI (installed
+    separately from PyPI) rather than bundling it, so the core stays
+    dependency-free. We resolve the target llama-server instance exactly like
+    `bench`, generate a throwaway llm-probe config pointing at that endpoint,
+    and stream llm-probe's own report.
+    """
+    import shutil
+    import subprocess
+
+    if not shutil.which("llm-probe"):
+        print(fail("llm-probe is not installed."))
+        print("  It's an optional tool that verifies tool-calling and prompt")
+        print("  adherence. Install it once, then re-run:\n")
+        print(f"    {cyan('pipx install llm-probe')}   {dim('# recommended')}")
+        print(f"    {cyan('pip install llm-probe')}    {dim('# or into the current env')}")
+        sys.exit(1)
+
+    results_dir = Path.home() / ".cache" / "spark" / "probe"
+
+    if params.get("report"):
+        return _probe_report(params, cfg, results_dir)
+
+    # Optional pre-step: load the model first, reusing serve() so all of its
+    # fit-check / quant / port logic lives in one place. Cold loads can outlast
+    # serve()'s own wait window, so we additionally poll the endpoint until it
+    # actually answers before probing.
+    if params.get("serve"):
+        if not params["model"]:
+            print(fail("--serve needs a model name: ") + cyan("spark llm probe <model> --serve"))
+            sys.exit(1)
+        res = serve({"model": params["model"], "quant": params.get("quant"),
+                     "port": params["port"], "ctx": 8192, "parallel": 4,
+                     "free_comfy": False}, cfg)
+        status, sport = res.get("status"), res.get("port")
+        if status == "error":
+            sys.exit(1)
+        params["port"] = sport
+        if status != "already_loaded":
+            deadline = time.time() + max(params["timeout"], 180)
+            if not _endpoint_ready(cfg["dgx_host"], sport, deadline):
+                print(fail("Server still not reachable — it may need more time to load."))
+                print(f"  Watch it: {cyan('spark llm logs --port ' + str(sport))}, then re-run the probe.")
+                sys.exit(1)
+        print()
+
+    instances = _llm_instances(cfg)
+    if not instances:
+        print(fail("No model loaded. Serve one first: ")
+              + cyan("spark llm serve <model>"))
+        sys.exit(1)
+
+    port, name = params["port"], params["model"]
+    if port:
+        matches = [i for i in instances if i["port"] == str(port)]
+    elif name:
+        matches = [i for i in instances if name.lower() in i["name"].lower()]
+    elif len(instances) == 1:
+        matches = instances
+    else:
+        print(fail("Multiple models loaded — specify <model> or --port:"))
+        for i in instances:
+            print(f"    --port {i['port']}  {cyan(i['name'])} {dim(i['quant'])}")
+        sys.exit(1)
+    if not matches:
+        print(fail("No loaded model matches that name/port."))
+        print(f"  Run {cyan('spark llm list')} to see what's loaded.")
+        sys.exit(1)
+
+    inst = matches[0]
+    pport = inst["port"]
+    provider = f"dgx-{pport}"
+    api_base = f"http://{cfg['dgx_host']}:{pport}/v1"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    # Throwaway config: a custom OpenAI-compatible provider for this one endpoint.
+    # Written by hand (no yaml dep) — the schema is trivial and fixed.
+    cfg_path = results_dir / f"{provider}.config.yaml"
+    cfg_path.write_text(
+        "providers:\n"
+        f"  {provider}:\n"
+        f"    api_base: {api_base}\n"
+        "tests:\n"
+        f"  timeout_local: {params['timeout']}\n"
+        f"  runs_per_model: {params['runs']}\n"
+        "output:\n"
+        f"  dir: {results_dir}\n"
+    )
+
+    print(bold(f"Probing {inst['name']} {cyan(inst['quant'])} on port {pport}"))
+    print(dim(f"  endpoint: {api_base}  ·  timeout={params['timeout']}s  ·  runs={params['runs']}\n"))
+
+    cmd = ["llm-probe", "--config", str(cfg_path), "test", provider,
+           "--timeout", str(params["timeout"]), "--runs", str(params["runs"])]
+    if params.get("tests"):
+        cmd += ["--tests", params["tests"]]
+    if params.get("model_id"):
+        cmd += ["--model", params["model_id"]]
+
+    # Stream llm-probe's own (already well-formatted) report straight through.
+    # Flush our buffered header first so it isn't reordered behind the child's output.
+    sys.stdout.flush()
+    rc = subprocess.run(cmd).returncode
+    if rc != 0:
+        print(fail(f"\nllm-probe exited with status {rc}."))
+        print(f"  Is the server ready? {cyan('spark llm logs --port ' + str(pport))}")
+        sys.exit(rc)
+
+    print(ok(f"\n  Probe complete — results cached in {dim(str(results_dir))}"))
+
+    unloaded = False
+    if params.get("unload"):
+        print()
+        unload({"port": int(pport), "quant": None, "name": None}, cfg)
+        unloaded = True
+
+    return {"action": "llm.probe", "model": inst["name"], "quant": inst["quant"],
+            "port": int(pport), "provider": provider, "timeout": params["timeout"],
+            "runs": params["runs"], "results_dir": str(results_dir),
+            "unloaded": unloaded}
+
+
+def _endpoint_ready(host, port, deadline) -> bool:
+    """Poll an OpenAI-compatible endpoint until /v1/models answers (or time out)."""
+    import urllib.request
+    url = f"http://{host}:{port}/v1/models"
+    print(dim("  Waiting for endpoint to answer..."))
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(url, timeout=5) as r:
+                if r.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(3)
+    return False
+
+
+def _probe_report(params, cfg, results_dir):
+    """`spark llm probe --report` — show cached results without re-probing.
+
+    Reads straight from the cache, so it needs neither a loaded model nor SSH.
+    Targets one provider with --port, otherwise reports every cached probe.
+    """
+    import subprocess
+
+    # Result files are `<provider>.yaml`; our throwaway configs are
+    # `<provider>.config.yaml` in the same dir — exclude those.
+    cached = sorted(p for p in results_dir.glob("*.yaml")
+                    if not p.name.endswith(".config.yaml")) if results_dir.exists() else []
+
+    if params["port"]:
+        providers = [f"dgx-{params['port']}"]
+    elif params["model"]:
+        print(fail("--report can't resolve a model by name (no live server is queried)."))
+        print(f"  Use {cyan('spark llm probe --report --port <N>')}, or run it with no target.")
+        sys.exit(1)
+    else:
+        providers = [p.stem for p in cached]
+
+    if not providers:
+        print(warn("No cached probe results yet."))
+        print(f"  Run {cyan('spark llm probe <model>')} to create some.")
+        return {"action": "llm.probe.report", "results_dir": str(results_dir), "providers": []}
+
+    # Minimal config so llm-probe knows where to read; api_base is unused by report.
+    results_dir.mkdir(parents=True, exist_ok=True)
+    cfg_path = results_dir / "_report.config.yaml"
+    lines = ["providers:"]
+    for p in providers:
+        lines += [f"  {p}:", "    api_base: \"\""]
+    lines += ["output:", f"  dir: {results_dir}", ""]
+    cfg_path.write_text("\n".join(lines))
+
+    rc = subprocess.run(["llm-probe", "--config", str(cfg_path), "report"]).returncode
+    if rc != 0:
+        print(fail(f"llm-probe report exited with status {rc}."))
+        sys.exit(rc)
+    return {"action": "llm.probe.report", "results_dir": str(results_dir),
+            "providers": providers}
+
+
 HANDLERS = {
     "llm.serve":       serve,
     "llm.bench":       bench,
+    "llm.probe":       probe,
     "llm.list":        ls,
     "llm.unload":      unload,
     "llm.stop":        stop,
