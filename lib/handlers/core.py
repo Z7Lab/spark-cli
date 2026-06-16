@@ -10,7 +10,7 @@ from pathlib import Path
 from sparkcore import (
     CONFIG_PATH, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen, docker_probe, _docker_env,
-    _llm_instances, _is_quant_dir, _parse_quant,
+    _llm_instances, _is_quant_dir, _parse_quant, _human,
     config_schema, _coerce, remote_script,
 )
 
@@ -324,11 +324,91 @@ def config_set(params, cfg):
             "value": value, "config_path": str(CONFIG_PATH)}
 
 
+def disk(params, cfg):
+    """Show DGX disk usage and the biggest spark-managed consumers."""
+    if params.get("prune"):
+        print(bold("Pruning Docker — unused images + build cache (volumes kept)…\n"))
+        out = ssh(cfg, _docker_env(cfg) + "docker system prune -af 2>&1 || true")
+        reclaimed = next((ln.split(":", 1)[1].strip()
+                          for ln in out.splitlines() if "reclaimed" in ln.lower()), None)
+        if out.strip():
+            print(dim(out.strip()))
+        free = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $4}}'")
+        print(ok(f"\n  Reclaimed {reclaimed or 'space'}.") + dim(f"  Now {free.strip()} free."))
+        return {"action": "core.disk", "pruned": True, "reclaimed": reclaimed,
+                "free": free.strip() or None}
+
+    print(bold("DGX Spark disk\n"))
+
+    # Free space on the filesystem holding the models dir (the big one).
+    df = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $2, $3, $4, $5}}'")
+    parts = df.split() if df else []
+    full = False
+    if len(parts) >= 4:
+        size, used, avail, pct = parts[:4]
+        try:
+            p = int(pct.rstrip("%"))
+            col = green if p < 80 else yellow if p < 95 else red
+            full = p >= 99
+        except ValueError:
+            col = dim
+        print(f"  Filesystem   {col(f'{used} used / {size}  ·  {avail} free  ({pct})')}\n")
+
+    # The llama.cpp checkout is …/llama.cpp/build/bin/llama-server — strip to the root.
+    sbin = cfg["server_bin"]
+    llama_dir = sbin.split("/build/")[0] if "/build/" in sbin else str(Path(sbin).parent)
+    targets = [
+        ("LLM models (GGUF)",          cfg["models_dir"]),
+        ("ComfyUI (install + models)", cfg.get("comfy_dir", "")),
+        ("Whisper models",             cfg.get("whisper_models_dir", "")),
+        ("llama.cpp (src + build)",    llama_dir),
+        ("TTS venv",                   cfg.get("tts_venv", "")),
+        ("HuggingFace cache",          "~/.cache/huggingface"),
+    ]
+    targets = [(lbl, p) for lbl, p in targets if p]
+
+    # One round-trip: each existing path emits "<idx>\t<bytes>" (du is metadata-only).
+    cmd = " ; ".join(
+        f'du -sb {p} 2>/dev/null | cut -f1 | sed "s/^/{i}\\t/"'
+        for i, (lbl, p) in enumerate(targets)
+    )
+    raw = ssh(cfg, cmd) or ""
+    sizes = {}
+    for line in raw.splitlines():
+        idx, _, b = line.partition("\t")
+        if idx.strip().isdigit() and b.strip().isdigit():
+            sizes[int(idx)] = int(b)
+
+    rows = sorted(((targets[i][0], sz) for i, sz in sizes.items()), key=lambda r: -r[1])
+    if rows:
+        print(bold("  Largest spark-managed paths"))
+        w = max(len(lbl) for lbl, _ in rows)
+        for lbl, sz in rows:
+            print(f"    {lbl:<{w}}   {cyan(_human(sz))}")
+
+    # Docker's own reclaimable view (images/containers/volumes/build cache).
+    ddf = ssh(cfg, _docker_env(cfg) + "docker system df 2>/dev/null || true")
+    if ddf.strip():
+        print(bold("\n  Docker"))
+        for line in ddf.splitlines():
+            print(f"    {dim(line)}")
+
+    if full or (rows and any("cache" in lbl.lower() for lbl, _ in rows)):
+        print(dim("\n  Reclaim without touching models:"))
+        print(dim("    · HuggingFace cache — re-downloads on demand"))
+        print(dim("    · docker system prune -af  (and `--volumes` if safe)"))
+        print(dim("    · drop a model dir under ") + cyan(cfg["models_dir"]) + dim(" you no longer serve"))
+
+    return {"action": "core.disk", "free": parts[2] if len(parts) >= 4 else None,
+            "paths": {targets[i][0]: sz for i, sz in sizes.items()}}
+
+
 HANDLERS = {
     "core.init":       init,
     "core.config":     config,
     "core.config_set": config_set,
     "core.status":     status,
+    "core.disk":       disk,
     "core.models":     models,
     "core.download":   download,
     "core.queue":      queue,

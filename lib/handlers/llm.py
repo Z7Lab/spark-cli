@@ -332,6 +332,68 @@ def open_ui(params, cfg):
     return {"action": "llm.open", "port": int(port), "url": url}
 
 
+def rm(params, cfg):
+    """Delete a downloaded model's GGUF files from disk. Destructive: frees disk
+    (not memory — that's unload). Refuses a loaded model; confirms by typed name."""
+    import shlex
+
+    name = params["model"]
+    quant = params.get("quant")
+    assume_yes = params.get("yes")
+
+    found = ssh(cfg, f"find {cfg['models_dir']} -name '*.gguf' 2>/dev/null | grep -i '{name}' | sort")
+    files = [f for f in found.strip().splitlines() if f]
+    if quant:
+        files = [f for f in files if quant.lower() in f.lower()]
+    if not files:
+        print(fail(f"No downloaded GGUF matches '{name}'" + (f" {quant}" if quant else "") + "."))
+        print(f"  Run {cyan('spark models')} to see what's downloaded.")
+        sys.exit(1)
+
+    # Never delete a model that's currently serving — unload it first.
+    loaded = [i for i in _llm_instances(cfg)
+              if name.lower() in i["name"].lower()
+              and (not quant or quant.lower() in i["quant"].lower())]
+    if loaded:
+        print(fail("That model is loaded — unload it before deleting:"))
+        for i in loaded:
+            print(f"    {cyan('spark llm unload --port ' + i['port'])}  {dim(i['name'] + ' ' + i['quant'])}")
+        sys.exit(1)
+
+    quoted = " ".join(shlex.quote(f) for f in files)
+    total = ssh(cfg, f"du -cb {quoted} 2>/dev/null | tail -1 | cut -f1")
+    try:
+        human = _human(int(total.strip()))
+    except (ValueError, AttributeError):
+        human = "?"
+    quants = sorted({_parse_quant(Path(f).name) for f in files})
+
+    print(bold(f"Delete {name} ") + dim(f"({', '.join(quants)})"))
+    print(f"  {len(files)} file(s), {cyan(human)} under {dim(cfg['models_dir'])}")
+    print(dim("  Frees disk space; irreversible (re-download with spark llm pull-models)."))
+
+    if not assume_yes:
+        try:
+            ans = input(f"\n  Type {bold(name)} to confirm deletion: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans != name:
+            print(red("  Cancelled — nothing deleted."))
+            sys.exit(1)
+
+    ssh(cfg, f"rm -f {quoted}")
+    # Drop the model dir too if no GGUFs remain (e.g. deleted the last quant).
+    for d in sorted({str(Path(f).parent) for f in files}):
+        if not ssh(cfg, f"find {shlex.quote(d)} -name '*.gguf' 2>/dev/null | head -1").strip():
+            ssh(cfg, f"rm -rf {shlex.quote(d)}")
+
+    free = ssh(cfg, f"df -h {cfg['models_dir']} 2>/dev/null | tail -1 | awk '{{print $4}}'")
+    print(ok(f"Deleted {name} {', '.join(quants)} — freed {human}.")
+          + dim(f"  Now {free.strip()} free."))
+    return {"action": "llm.rm", "model": name, "quants": quants,
+            "files": len(files), "freed": human}
+
+
 def _catalog_repo_id(name):
     """Source repo_id for a model name, from the LLM catalog (provenance)."""
     try:
@@ -758,6 +820,7 @@ HANDLERS = {
     "llm.bench":       bench,
     "llm.probe":       probe,
     "llm.reports":     reports_cmd,
+    "llm.rm":          rm,
     "llm.list":        ls,
     "llm.unload":      unload,
     "llm.stop":        stop,

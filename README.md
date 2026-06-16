@@ -26,6 +26,7 @@ spark init
 spark init                                        First-time setup — create ~/.config/spark.json
 spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM)
 spark models                                      List downloaded models with quant and size
+spark disk [--prune]                              DGX disk usage by consumer; --prune reclaims Docker space
 
 # Guided task flows (agent-friendly)
 spark playbook <list|show|run|check> [name]       Discover & walk self-describing task flows
@@ -35,6 +36,7 @@ spark llm serve <model> [--quant Q] [--port N] [--ctx N] [--parallel N]
                                                   Load a model (refuses if it won't fit)
 spark llm list                                    Show loaded models, ports, footprints
 spark llm unload <name|--port N>                  Unload one model, free its memory
+spark llm rm <model> [--quant Q]                  Delete a downloaded model from disk (typed-name confirm)
 spark llm stop                                    Stop ALL LLM servers at once
 spark llm logs [--port N] [--lines N]             Tail a server log
 spark llm open [--port N]                         Open built-in chat UI in browser
@@ -301,6 +303,7 @@ same set, kept in one scannable place. Commands run **on the DGX** unless noted
 | `spark llm serve` refuses: "needs ~XG, but only YG is free" | Model won't fit in unified memory alongside what's already loaded | `spark llm list` to see residents, then `spark llm unload --port N` (or `spark llm stop`) to free room |
 | `spark llm serve` refuses: "Port N is in use" | Another model already bound that port | Pick a free one with `--port N`, or `spark llm unload --port N` first |
 | Model OOMs / errors mid-load (in `spark llm logs`) | Quant or context window too large for free memory | Free memory (`spark llm list` → `unload`), or load a smaller quant, or lower `--ctx` (default 8192) |
+| Build/download fails: "No space left on device" | DGX disk full | `spark disk` to see the biggest consumers; `spark disk --prune` (Docker), or `spark llm rm <model>` to drop one you don't serve |
 | Whisper client gets **404** on `/v1/audio/transcriptions` | whisper.cpp has no native OpenAI route | Fixed in current `spark transcribe start` (launches with `--inference-path /v1/audio/transcriptions`). Only that path exists — there is no `/v1/models`. Restart: `spark transcribe stop && spark transcribe start` |
 | `spark status` → `SSH unreachable`; `gx10-*.local` won't resolve | mDNS/avahi not resolving the `.local` host, or wrong host/key | Test `ssh user@gx10-<id>.local`. Ensure `avahi-daemon` is running on the DGX, or set `dgx_host` to its IP in `~/.config/spark.json` |
 | `no config file — using defaults` | `~/.config/spark.json` not created yet | `spark init` |
