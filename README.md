@@ -40,6 +40,7 @@ spark llm logs [--port N] [--lines N]             Tail a server log
 spark llm open [--port N]                         Open built-in chat UI in browser
 spark llm bench [<model>] [--runs N]              Measure a loaded model's speed (tokens/sec)
 spark llm probe [<model>] [--serve --unload]      Verify tool-calling & prompt adherence (needs: pipx install llm-probe)
+spark llm reports [--out F]                        Render saved bench+probe results (reports/) as a Markdown table
 
 # Image / video generation
 spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
@@ -121,7 +122,9 @@ Models for each service are listed in an editable catalog,
 `templates/models.json` (sections: `comfy`, `tts`, `whisper`, `llm`). The `llm` section lists large MoE models validated for the GB10's
 128 GB unified memory in Unsloth Dynamic (UD) quants — each entry carries the quant,
 footprint, and rationale (run `spark llm pull-models` to see them). Edit freely.
-Measured generation speed (tok/s) for each on the GB10: **[docs/benchmarks.md](docs/benchmarks.md)**.
+Measured speed and capability for each on the GB10:
+**[reports/reference/RESULTS.md](reports/reference/RESULTS.md)** (the rendered table) —
+how it's measured and what it covers: **[docs/benchmarks.md](docs/benchmarks.md)**.
 
 ## LLM serving
 

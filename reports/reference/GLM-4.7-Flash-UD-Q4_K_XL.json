@@ -1,0 +1,33 @@
+{
+  "model": "GLM-4.7-Flash",
+  "quant": "UD-Q4_K_XL",
+  "source_repo": "unsloth/GLM-4.7-Flash-GGUF",
+  "footprint": "~17 GB",
+  "engine": {
+    "name": "llama.cpp",
+    "build": "1738129be"
+  },
+  "host": "DGX Spark GB10, 128 GB",
+  "updated": "2026-06-16",
+  "speed": {
+    "tps_mean": 67.7,
+    "runs": 2,
+    "prompt": "make a python script to sort numbers",
+    "method": "server timings.predicted_per_second",
+    "measured": "2026-06-13"
+  },
+  "capability": {
+    "summary": "7/8",
+    "measured": "2026-06-16",
+    "tests": {
+      "tool_call_basic": "pass",
+      "tool_call_enum": "pass",
+      "tool_call_multi": "pass",
+      "think_block_leak": "pass",
+      "empty_response": "pass",
+      "system_prompt": "fail",
+      "response_time": "pass",
+      "tool_call_large": "pass"
+    }
+  }
+}

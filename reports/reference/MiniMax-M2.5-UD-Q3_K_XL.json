@@ -1,0 +1,20 @@
+{
+  "model": "MiniMax-M2.5",
+  "quant": "UD-Q3_K_XL",
+  "source_repo": "unsloth/MiniMax-M2.5-GGUF",
+  "footprint": "~101 GB",
+  "engine": {
+    "name": "llama.cpp",
+    "build": "1738129be"
+  },
+  "host": "DGX Spark GB10, 128 GB",
+  "updated": "2026-06-13",
+  "speed": {
+    "tps_mean": 25.9,
+    "runs": 2,
+    "prompt": "make a python script to sort numbers",
+    "method": "server timings.predicted_per_second",
+    "measured": "2026-06-13"
+  },
+  "capability": null
+}

@@ -1,0 +1,20 @@
+{
+  "model": "Qwen3.6-35B-A3B",
+  "quant": "UD-Q5_K_M",
+  "source_repo": "unsloth/Qwen3.6-35B-A3B-GGUF",
+  "footprint": "~26 GB",
+  "engine": {
+    "name": "llama.cpp",
+    "build": "1738129be"
+  },
+  "host": "DGX Spark GB10, 128 GB",
+  "updated": "2026-06-13",
+  "speed": {
+    "tps_mean": 60.7,
+    "runs": 2,
+    "prompt": "make a python script to sort numbers",
+    "method": "server timings.predicted_per_second",
+    "measured": "2026-06-13"
+  },
+  "capability": null
+}

@@ -33,3 +33,9 @@ config.local.*
 
 # Runtime engine catalog — seeded from templates/engines.example.json on first use.
 templates/engines.json
+
+# Captured model reports (spark llm bench/probe --save). Your own runs stay
+# local; only the project's reference set under reports/reference/ is tracked.
+# Want your own results in git? Delete the next two lines or commit a subdir.
+/reports/*
+!/reports/reference/

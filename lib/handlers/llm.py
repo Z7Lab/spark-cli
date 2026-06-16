@@ -330,6 +330,81 @@ def open_ui(params, cfg):
     return {"action": "llm.open", "port": int(port), "url": url}
 
 
+def _catalog_repo_id(name):
+    """Source repo_id for a model name, from the LLM catalog (provenance)."""
+    try:
+        cat, _ = _models_catalog()
+        models = cat.get("llm", {}).get("models", [])
+        for m in models:                       # exact name match first
+            if m.get("name", "").lower() == name.lower():
+                return m.get("repo_id")
+        for m in models:                       # then a forgiving substring match
+            cn = m.get("name", "").lower()
+            if cn and (cn in name.lower() or name.lower() in cn):
+                return m.get("repo_id")
+    except Exception:
+        pass
+    return None
+
+
+def _model_provenance(cfg, inst):
+    """Shared report provenance for a loaded instance: source, footprint, engine."""
+    prov = {"model": inst["name"], "quant": inst["quant"],
+            "source_repo": _catalog_repo_id(inst["name"]),
+            "host": cfg.get("host_label")}
+    try:
+        nbytes = _du_bytes(cfg, _quant_glob(inst["model_path"], inst["quant"]))
+        if nbytes:
+            prov["footprint"] = _human(nbytes)
+    except Exception:
+        pass
+    try:
+        st = _engine_state(cfg, "llama")
+        if st:
+            prov["engine"] = {"name": "llama.cpp", "build": st.get("installed")}
+    except Exception:
+        pass
+    return prov
+
+
+def _probe_capability_from_cache(cache_path):
+    """Best-effort per-test pass/fail from llm-probe's cached YAML for the run we
+    just did. A tight stdlib parse of a fixed, simple structure — None on any
+    surprise, so the caller can fall back."""
+    import reports
+    try:
+        lines = Path(cache_path).read_text().splitlines()
+    except OSError:
+        return None
+    tests, avg_ms, cur, in_tests = {}, None, None, False
+    for ln in lines:
+        s = ln.strip()
+        if s.startswith("avg_response_ms:"):
+            try:
+                avg_ms = int(s.split(":", 1)[1].strip())
+            except ValueError:
+                pass
+        if s == "tests:":
+            in_tests = True
+            continue
+        if in_tests:
+            if s.startswith("last_tested") or s.startswith("- id"):
+                in_tests = False
+                continue
+            m = re.match(r"^([\w-]+):$", s)
+            if m and ln.startswith("    ") and not ln.startswith("      "):
+                cur = m.group(1)
+                tests[cur] = None
+            elif s.startswith("passed:") and cur:
+                tests[cur] = s.split(":", 1)[1].strip() == "true"
+    if not tests:
+        return None
+    passed = sum(1 for v in tests.values() if v)
+    return {"summary": f"{passed}/{len(tests)}",
+            "tests": {k: ("pass" if v else "fail") for k, v in tests.items()},
+            "avg_response_ms": avg_ms, "measured": reports.today()}
+
+
 def bench(params, cfg):
     """Measure a loaded model's generation speed (tokens/sec) over its API."""
     import json as _json
@@ -403,9 +478,24 @@ def bench(params, cfg):
     avg = sum(valid) / len(valid) if valid else None
     if avg and runs > 1:
         print(ok(f"\n  mean {avg:.2f} t/s over {len(valid)} run(s)"))
+
+    report_path = None
+    if params.get("save") or params.get("out"):
+        import reports
+        rp = Path(params["out"]).expanduser() if params.get("out") \
+            else reports.default_path(inst["name"], inst["quant"])
+        speed = {"tps_mean": round(avg, 2) if avg else None,
+                 "tps_runs": [round(x, 2) for x in valid],
+                 "runs": runs, "prompt": prompt, "max_tokens": max_tokens,
+                 "method": "server timings.predicted_per_second / wall-clock",
+                 "measured": reports.today()}
+        reports.update(rp, provenance=_model_provenance(cfg, inst), speed=speed)
+        report_path = str(rp)
+        print(dim(f"  report → {rp}"))
+
     return {"action": "llm.bench", "model": inst["name"], "quant": inst["quant"],
             "port": int(bport), "prompt": prompt, "runs": runs,
-            "tps": rates, "tps_mean": avg}
+            "tps": rates, "tps_mean": avg, "report": report_path}
 
 
 def pull_models(params, cfg):
@@ -553,6 +643,17 @@ def probe(params, cfg):
 
     print(ok(f"\n  Probe complete — results cached in {dim(str(results_dir))}"))
 
+    report_path = None
+    if params.get("save") or params.get("out"):
+        import reports
+        rp = Path(params["out"]).expanduser() if params.get("out") \
+            else reports.default_path(inst["name"], inst["quant"])
+        cap = _probe_capability_from_cache(results_dir / f"{provider}.yaml")
+        reports.update(rp, provenance=_model_provenance(cfg, inst),
+                       capability=cap or {"summary": "?", "measured": reports.today()})
+        report_path = str(rp)
+        print(dim(f"  report → {rp}"))
+
     unloaded = False
     if params.get("unload"):
         print()
@@ -562,7 +663,7 @@ def probe(params, cfg):
     return {"action": "llm.probe", "model": inst["name"], "quant": inst["quant"],
             "port": int(pport), "provider": provider, "timeout": params["timeout"],
             "runs": params["runs"], "results_dir": str(results_dir),
-            "unloaded": unloaded}
+            "report": report_path, "unloaded": unloaded}
 
 
 def _endpoint_ready(host, port, deadline) -> bool:
@@ -625,10 +726,33 @@ def _probe_report(params, cfg, results_dir):
             "providers": providers}
 
 
+def reports_cmd(params, cfg):
+    """Render the captured reports (bench + probe) as a Markdown table."""
+    import reports
+    directory = Path(params["dir"]).expanduser() if params.get("dir") else None
+    md = reports.render_markdown(directory)
+    if not md:
+        loc = directory or reports.REPORTS_DIR
+        print(dim(f"No reports under {loc}."))
+        print(f"  Generate some: {cyan('spark llm bench <model> --save')} "
+              f"or {cyan('spark llm probe <model> --save')}")
+        return {"action": "llm.reports", "rows": 0}
+
+    if params.get("out"):
+        outp = Path(params["out"]).expanduser()
+        outp.parent.mkdir(parents=True, exist_ok=True)
+        outp.write_text(reports.render_document(directory))
+        print(ok(f"Wrote table → {outp}"))
+    else:
+        print(md)
+    return {"action": "llm.reports", "out": params.get("out")}
+
+
 HANDLERS = {
     "llm.serve":       serve,
     "llm.bench":       bench,
     "llm.probe":       probe,
+    "llm.reports":     reports_cmd,
     "llm.list":        ls,
     "llm.unload":      unload,
     "llm.stop":        stop,

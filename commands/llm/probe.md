@@ -17,7 +17,9 @@
     {"name": "report",  "type": "bool",   "help": "Show cached probe results instead of running a new probe"},
     {"name": "serve",   "type": "bool",   "help": "Load the model first (fit-checked) if it isn't already, then probe"},
     {"name": "quant",   "type": "string", "help": "Quant to load with --serve when several exist (e.g. UD-Q4_K_XL)"},
-    {"name": "unload",  "type": "bool",   "help": "Unload the model after a successful probe (pair with --serve for a one-shot check)"}
+    {"name": "unload",  "type": "bool",   "help": "Unload the model after a successful probe (pair with --serve for a one-shot check)"},
+    {"name": "save",    "type": "bool",   "help": "Save the capability result to a per-model report under reports/"},
+    {"name": "out",     "type": "string", "help": "Write the report to a specific path instead of the default reports/ location"}
   ]
 }
 ```
@@ -53,6 +55,13 @@ load a specific quant non-interactively:
 
     spark llm probe GLM-4.7-Flash --serve --unload
     spark llm probe GLM-4.7-Flash --serve --quant UD-Q4_K_XL --runs 3
+
+Pass `--save` to record the per-test capability result in this model's report
+under `reports/` (shares provenance with `spark llm bench --save`, which fills
+the speed section of the same file). `spark llm reports` renders them all:
+
+    spark llm probe GLM-4.7-Flash --save
+    spark llm reports
 
 Re-view past results without re-running (no loaded model needed). With no
 target it lists every cached probe; narrow with `--port`:

@@ -1,0 +1,21 @@
+{
+  "model": "Nemotron-3-Super",
+  "quant": "UD-Q4_K_M",
+  "source_repo": "unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF",
+  "footprint": "~82 GB",
+  "engine": {
+    "name": "llama.cpp",
+    "build": "1738129be"
+  },
+  "host": "DGX Spark GB10, 128 GB",
+  "updated": "2026-06-13",
+  "speed": {
+    "tps_mean": 17.0,
+    "runs": 2,
+    "prompt": "make a python script to sort numbers",
+    "method": "server timings.predicted_per_second",
+    "measured": "2026-06-13",
+    "note": "--parallel 1"
+  },
+  "capability": null
+}

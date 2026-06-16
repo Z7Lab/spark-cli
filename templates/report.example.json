@@ -1,0 +1,12 @@
+{
+  "_comment": "Skeleton for a captured model report. One file per model+quant. `spark llm bench --save` fills the `speed` section and `spark llm probe --save` fills `capability`; both update the same file in place, sharing the provenance fields (source_repo, quant, footprint, engine build). The committed set under reports/reference/ is this project's reference data; your own runs land in reports/ (gitignored). Render every report into a Markdown table with `spark llm reports`.",
+  "model": null,
+  "quant": null,
+  "source_repo": null,
+  "footprint": null,
+  "engine": null,
+  "host": null,
+  "updated": null,
+  "speed": null,
+  "capability": null
+}

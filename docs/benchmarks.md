@@ -1,50 +1,81 @@
 # LLM inference benchmarks (DGX Spark / GB10)
 
-Generation speed for the LLMs in the catalog
-([`templates/models.json`](../templates/models.example.json)), measured on the
-reference hardware with one consistent method. The GB10 is **memory-bandwidth
-bound** for token generation, so the big lever is **active parameters per token**
-(MoE models read only a fraction of their weights each token) — which is why a 35B
-MoE outruns a dense-ish 120B by 3–4×.
+How spark measures the catalog models, what the numbers mean, and where the
+results live. The GB10 is **memory-bandwidth bound** for token generation, so the
+dominant lever is **active parameters per token** — MoE models read only a
+fraction of their weights each step, which is why a 35B MoE can outrun a
+dense-ish 120B by several times.
 
-**Hardware:** DGX Spark GB10, 128 GB unified memory
-**Engine:** llama.cpp pinned at `1738129be` (build 9426) — see
-[`templates/engines.json`](../templates/engines.example.json). *Numbers are only
-meaningful against a known engine build; re-run after moving the pin.*
-**Method:** `spark llm bench` — prompt `make a python script to sort numbers`,
-`--ctx 8192`, 2 runs averaged, server-side `timings.predicted_per_second`
-(generation throughput, excludes prefill).
-**Date:** 2026-06-13
+## What's measured
 
-| Model | Quant | Params (total / active) | Footprint | **tok/s** |
-|-------|-------|-------------------------|-----------|-----------|
-| GLM-4.7-Flash               | UD-Q4_K_XL | compact MoE       | ~17 GB  | **67.7** |
-| Qwen3.6-35B-A3B             | UD-Q5_K_M  | 35B / 3B (A3B)    | ~26 GB  | **60.7** |
-| MiniMax-M2.5                | UD-Q3_K_XL | 229B / 10B        | ~101 GB | **25.9** |
-| Nemotron-3-Super            | UD-Q4_K_M  | 120B / 12B        | ~82 GB  | **17.0** † |
+**Speed** — `spark llm bench` sends a fixed prompt to a loaded model's
+OpenAI-compatible endpoint and reports generation throughput from llama-server's
+own `timings.predicted_per_second` (generation only, excludes prefill/network),
+falling back to wall-clock tokens÷seconds when that's absent.
 
-† Nemotron is benched at `--parallel 1`. At the default `--parallel 4` it
-**fit-refuses** — its estimated KV cache (~44 GB) pushes weights+KV+reserve past the
-box's free memory. The single-request bench measures per-token gen speed, which
-`--parallel` (concurrency slots) does not change; only the memory headroom does.
+**Capability** — `spark llm probe` checks whether a model actually works in an
+agent loop: valid tool calls, enum/argument constraints, and system-prompt
+adherence (via the optional [`llm-probe`](https://pypi.org/project/llm-probe/) —
+`pipx install llm-probe`). Speed without capability is a trap; a model can clear
+60 t/s and still fail to emit a usable tool call.
 
-## Reading it
+**Method:** prompt `make a python script to sort numbers`, `--ctx 8192`, 2 runs
+averaged, against a **pinned** engine — throughput is only comparable against a
+known build, so confirm the pin with `spark engine status` before trusting a
+comparison. The bench path is spot-checked against hand-run `llama-server`
+baselines: `spark llm bench` reports the same numbers as launching the server by
+hand.
 
-- **MoE active-params win:** GLM (compact MoE) and Qwen3.6-35B-A3B (3B active) are
-  the snappy daily drivers. MiniMax (229B total but only 10B active) still clears
-  ~26 t/s at a 101 GB footprint. Nemotron (120B/12B, hybrid Mamba-2+MoE) is the
-  slowest — more active compute per token, suited to long-context work over raw TPS.
-- **For agentic loops** (constant round-trips), throughput dominates → the A3B-class
-  models. For one-shot hard reasoning where you'll wait, the bigger models earn it.
+**Reference hardware:** DGX Spark GB10, 128 GB unified memory · engine llama.cpp
+pinned per [`templates/engines.example.json`](../templates/engines.example.json).
+
+## Where the results live
+
+The actual numbers are **not** in this doc — they live as per-model JSON reports
+under [`reports/reference/`](../reports/reference/) (the committed reference set;
+your own `--save` runs stay local and gitignored). Each report carries its
+provenance: source repo, quant, footprint, engine build, and the date measured.
+
+For a quick look without running anything, see the rendered table at
+[`reports/reference/RESULTS.md`](../reports/reference/RESULTS.md). It's generated
+from those JSON reports — `spark llm reports` prints the table, and `--out`
+writes it to a file:
+
+```bash
+spark llm reports                          # print every report you have
+spark llm reports --dir reports/reference  # just the committed reference set
+spark llm reports --dir reports/reference --out reports/reference/RESULTS.md  # regenerate the committed table
+```
 
 ## Reproduce
 
 ```bash
 spark engine status                       # confirm the engine matches the pin first
-spark llm serve <model>                   # add --parallel 1 for the largest models
-spark llm bench <model> --runs 2
+spark llm serve  <model>                  # add --parallel 1 for the largest models
+spark llm bench  <model> --runs 2 --save  # speed      → reports/<model>.json
+spark llm probe  <model> --save           # capability → same file
+spark llm reports                         # render the table from the JSON
 ```
 
-These match prior hand-run baselines (Nemotron 16.97 vs 16.90, MiniMax 25.87 vs
-25.88 from 2026-05-30), which is the cross-check that the `spark llm bench` path
-reports the same numbers as launching `llama-server` by hand.
+## Reading it
+
+- **Active params, not total, drive speed.** Compact MoE models and low-active
+  designs (A3B-class) are the snappy daily drivers; a model with high *total* but
+  low *active* params can still be fast at a large footprint. More active compute
+  per token (denser or hybrid Mamba/MoE models) trades throughput for raw
+  capability and long-context strength.
+- **Match the model to the workload.** Agentic loops (constant round-trips) are
+  throughput-dominated → favor the fast A3B-class models. One-shot hard reasoning
+  where you'll wait can justify the bigger, slower models.
+- **Read speed *and* capability together.** A model can top the speed table yet
+  fail system-prompt adherence — exactly the trade-off the capability column in a
+  report surfaces and a TPS number alone hides.
+
+## Notes
+
+- **The largest models bench at `--parallel 1`.** Some (e.g. the 120B-class)
+  fit-refuse at the default `--parallel 4` because the estimated KV cache pushes
+  weights + KV + reserve past free memory. A single-request bench measures
+  per-token generation speed, which `--parallel` (concurrency slots) doesn't
+  change — only memory headroom does. The report records when a model was benched
+  this way.
