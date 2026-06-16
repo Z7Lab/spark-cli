@@ -2,13 +2,13 @@
   "model": "MiniMax-M2.5",
   "quant": "UD-Q3_K_XL",
   "source_repo": "unsloth/MiniMax-M2.5-GGUF",
-  "footprint": "~101 GB",
+  "footprint": "94G",
   "engine": {
     "name": "llama.cpp",
-    "build": "1738129be"
+    "build": "1738129bee5c81b06fa1850daf3f958813c76f5f"
   },
   "host": "DGX Spark GB10, 128 GB",
-  "updated": "2026-06-13",
+  "updated": "2026-06-16",
   "speed": {
     "tps_mean": 25.9,
     "runs": 2,
@@ -16,5 +16,19 @@
     "method": "server timings.predicted_per_second",
     "measured": "2026-06-13"
   },
-  "capability": null
+  "capability": {
+    "summary": "8/8",
+    "tests": {
+      "tool_call_basic": "pass",
+      "tool_call_enum": "pass",
+      "tool_call_multi": "pass",
+      "think_block_leak": "pass",
+      "empty_response": "pass",
+      "system_prompt": "pass",
+      "response_time": "pass",
+      "tool_call_large": "pass"
+    },
+    "avg_response_ms": 3912,
+    "measured": "2026-06-16"
+  }
 }
