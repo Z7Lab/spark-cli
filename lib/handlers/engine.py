@@ -87,8 +87,20 @@ def build(params, cfg):
             print(red("\nAborted.")); return {"action": "engine.build", "built": False}
 
     q = shlex.quote(src)
-    build_cmd = (f"cd {q} && git fetch --tags origin && git checkout {shlex.quote(ref)} && "
-                 f"cmake -S . -B build {flags} && cmake --build build -j$(nproc)")
+    # Self-heal a stale CMake cache: if build/ was configured against a different
+    # source path (e.g. the repo was relocated to /opt/spark), cmake refuses to
+    # reconfigure. Wipe build/ only on that mismatch, so normal incremental
+    # rebuilds keep their cache.
+    guard = (f'if [ -f build/CMakeCache.txt ] && '
+             f'! grep -qxF "CMAKE_HOME_DIRECTORY:INTERNAL={src}" build/CMakeCache.txt; then '
+             f'echo "[spark] CMake cache points to a different source dir — wiping build/"; '
+             f'rm -rf build; fi')
+    # Non-interactive ssh doesn't load the login profile, so nvcc (under
+    # /usr/local/cuda/bin) is off PATH and a fresh CMake configure fails to find
+    # the CUDA compiler. Put it on PATH when present.
+    cuda = '{ [ -d /usr/local/cuda/bin ] && export PATH="/usr/local/cuda/bin:$PATH" || true; }'
+    build_cmd = (f"cd {q} && {cuda} && git fetch --tags origin && git checkout {shlex.quote(ref)} && "
+                 f"{guard} && cmake -S . -B build {flags} && cmake --build build -j$(nproc)")
     print(dim(f"\nBuilding on {cfg['dgx_host']}…\n"))
     rc = subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}", build_cmd]).returncode
     if rc != 0:

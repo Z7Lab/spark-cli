@@ -48,7 +48,9 @@
       { "repo_id": "unsloth/NVIDIA-Nemotron-3-Super-120B-A12B-GGUF",  "name": "Nemotron-3-Super", "glob": "*UD-Q4_K_M*",   "flat": true, "label": "NVIDIA Nemotron-3-Super 120B-A12B · UD-Q4_K_M · ~82.5 GB",
         "why": "NVIDIA's own 120B MoE (12B active), tuned for their stack. Fits the 128 GB UMA — the class of model the Spark exists to run." },
       { "repo_id": "unsloth/MiniMax-M2.5-GGUF",                       "name": "MiniMax-M2.5",     "glob": "*UD-Q3_K_XL*",  "flat": true, "label": "MiniMax-M2.5 · UD-Q3_K_XL · ~101 GB (4 shards)",
-        "why": "Largest single model that fits the box — UD-Q3_K_XL trades bits for capacity while the dynamic quant preserves quality. Run it solo; it nearly fills unified memory." }
+        "why": "Largest single model that fits the box — UD-Q3_K_XL trades bits for capacity while the dynamic quant preserves quality. Run it solo; it nearly fills unified memory." },
+      { "repo_id": "unsloth/gemma-4-26B-A4B-it-qat-GGUF",            "name": "Gemma-4-26B-A4B", "glob": "*UD-Q4_K_XL*",  "flat": true, "label": "Gemma 4 26B-A4B (QAT) · UD-Q4_K_XL · ~14 GB",
+        "why": "Compact MoE — 3.8B active of 25.2B — with quantization-aware training: daily-driver speed at the smallest footprint here, near-fp accuracy (QAT ships a single quant; higher precision degrades it). Needs a llama.cpp from 2026-06-05 or later for the Gemma 4 architecture." }
     ]
   }
 }

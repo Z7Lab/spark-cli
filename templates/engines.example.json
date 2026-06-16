@@ -4,11 +4,11 @@
   "llama": {
     "repo": "https://github.com/ggml-org/llama.cpp",
     "branch": "master",
-    "commit": "1738129bee5c81b06fa1850daf3f958813c76f5f",
+    "commit": "74ade52741203e5c8f81eaf06a96cb1cfe15f2a3",
     "cmake_flags": ["-DGGML_CUDA=ON", "-DCMAKE_CUDA_ARCHITECTURES=121", "-DBUILD_SHARED_LIBS=ON", "-DGGML_NATIVE=ON", "-DCMAKE_BUILD_TYPE=Release"],
     "path_key": "server_bin",
     "binary": "build/bin/llama-server",
-    "validated": "Qwen3.6-35B-A3B Q5 ~60.9 t/s (2026-06-08, build 9426)",
+    "validated": "build 9672 (74ade5274) — Gemma 4-capable, moved off the 2026-05-30 pin (build 9426) to add the Gemma 4 architecture",
     "label": "llama.cpp llama-server — GB10/sm_121, shared-lib (ggml dynamic backends) build"
   }
 }

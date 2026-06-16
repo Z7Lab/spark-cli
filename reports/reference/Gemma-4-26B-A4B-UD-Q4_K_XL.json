@@ -1,0 +1,39 @@
+{
+  "model": "Gemma-4-26B-A4B",
+  "quant": "UD-Q4_K_XL",
+  "source_repo": "unsloth/gemma-4-26B-A4B-it-qat-GGUF",
+  "footprint": "13G",
+  "engine": {
+    "name": "llama.cpp",
+    "build": "74ade52741203e5c8f81eaf06a96cb1cfe15f2a3"
+  },
+  "host": null,
+  "updated": "2026-06-16",
+  "speed": {
+    "tps_mean": 80.72,
+    "tps_runs": [
+      80.39,
+      81.05
+    ],
+    "runs": 2,
+    "prompt": "make a python script to sort numbers",
+    "max_tokens": 2048,
+    "method": "server timings.predicted_per_second / wall-clock",
+    "measured": "2026-06-16"
+  },
+  "capability": {
+    "summary": "7/8",
+    "tests": {
+      "tool_call_basic": "pass",
+      "tool_call_enum": "pass",
+      "tool_call_multi": "pass",
+      "think_block_leak": "pass",
+      "empty_response": "pass",
+      "system_prompt": "fail",
+      "response_time": "pass",
+      "tool_call_large": "pass"
+    },
+    "avg_response_ms": 1739,
+    "measured": "2026-06-16"
+  }
+}

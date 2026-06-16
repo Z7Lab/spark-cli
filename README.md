@@ -287,7 +287,17 @@ spark engine build llama --latest   # deliberately move to upstream HEAD, then r
 `status` catches an out-of-band rebuild (someone ran `git pull` + rebuilt) before it
 surprises you at serve time — `spark llm serve` also prints a one-line warning if the
 engine has drifted. `build` is reproducible (same pin + flags → same binary) and
-re-records the pin only when you deliberately move it with `--ref`/`--latest`.
+re-records the pin only when you deliberately move it with `--ref`/`--latest`. It
+self-heals a stale CMake cache (e.g. after the source is relocated under `/opt/spark`).
+
+**Updating the pin is how you unlock new models.** The pin is a floor, not a ceiling:
+a brand-new model architecture only loads once llama.cpp has merged support for it, so
+running the latest models often means moving the pin **forward**. For example, Gemma 4
+(released 2026-06-05) needs a llama.cpp from that date or later — an older engine passes
+the memory fit-check but then fails to load the model as an unknown architecture. When a
+new model won't serve on the current build, `spark engine build llama --latest` rebuilds
+from upstream HEAD and re-pins; afterwards, re-check throughput with `spark llm bench`,
+since a new build can shift tok/s and your saved reports were measured against the old pin.
 
 ## Troubleshooting
 
@@ -303,7 +313,9 @@ same set, kept in one scannable place. Commands run **on the DGX** unless noted
 | `spark llm serve` refuses: "needs ~XG, but only YG is free" | Model won't fit in unified memory alongside what's already loaded | `spark llm list` to see residents, then `spark llm unload --port N` (or `spark llm stop`) to free room |
 | `spark llm serve` refuses: "Port N is in use" | Another model already bound that port | Pick a free one with `--port N`, or `spark llm unload --port N` first |
 | Model OOMs / errors mid-load (in `spark llm logs`) | Quant or context window too large for free memory | Free memory (`spark llm list` → `unload`), or load a smaller quant, or lower `--ctx` (default 8192) |
+| New model fails to load — "unknown architecture" in `spark llm logs` (fit-check passed) | The pinned llama.cpp predates that model | `spark engine build llama --latest` to update + re-pin (see [Engines](#engines-pinned-builds)), then re-`bench` |
 | Build/download fails: "No space left on device" | DGX disk full | `spark disk` to see the biggest consumers; `spark disk --prune` (Docker), or `spark llm rm <model>` to drop one you don't serve |
+| `spark engine build` fails: "CMakeCache.txt directory is different" or "No CMAKE_CUDA_COMPILER" | Stale build cache after a source move, or `nvcc` off PATH | Current `build` self-heals the cache and puts `/usr/local/cuda/bin` on PATH; just re-run `spark engine build llama` |
 | Whisper client gets **404** on `/v1/audio/transcriptions` | whisper.cpp has no native OpenAI route | Fixed in current `spark transcribe start` (launches with `--inference-path /v1/audio/transcriptions`). Only that path exists — there is no `/v1/models`. Restart: `spark transcribe stop && spark transcribe start` |
 | `spark status` → `SSH unreachable`; `gx10-*.local` won't resolve | mDNS/avahi not resolving the `.local` host, or wrong host/key | Test `ssh user@gx10-<id>.local`. Ensure `avahi-daemon` is running on the DGX, or set `dgx_host` to its IP in `~/.config/spark.json` |
 | `no config file — using defaults` | `~/.config/spark.json` not created yet | `spark init` |
