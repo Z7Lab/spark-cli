@@ -55,4 +55,10 @@ listing what to unload. If it refuses, ask the user which resident model to free
 ## verify
 
 `spark llm list` shows the loaded model, its port, and footprint. Hand the user the
-API/chat URL (`http://<host>:<port>`). Done.
+API/chat URL (`http://<host>:<port>`).
+
+To evaluate the model before building on it: `spark llm bench <model>` measures
+generation speed (tokens/sec), and `spark llm probe <model>` verifies it actually
+works for agents — tool-calling, enum/argument constraints, and system-prompt
+adherence (needs `pipx install llm-probe`). Add `--save` to either to record the
+result in a per-model report; `spark llm reports` renders them as a table. Done.

@@ -51,7 +51,9 @@ llm-probe's pass/fail report. Results are cached under
 One-shot "is this model any good?" — serve (fit-checked), probe, then unload,
 leaving memory as it found it. `--serve` reuses `spark llm serve`, so its
 fit-check, quant selection, and port assignment all apply; pass `--quant` to
-load a specific quant non-interactively:
+load a specific quant non-interactively. It loads with a single request slot
+(`--parallel 1`) — probing is sequential, so the smaller KV cache lets the
+largest models fit without changing what any one request sees:
 
     spark llm probe GLM-4.7-Flash --serve --unload
     spark llm probe GLM-4.7-Flash --serve --quant UD-Q4_K_XL --runs 3

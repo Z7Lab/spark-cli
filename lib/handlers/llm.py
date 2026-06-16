@@ -180,6 +180,8 @@ def serve(params, cfg):
             print(f"  API      http://{cfg['dgx_host']}:{port}/v1")
             chat_url = f"http://{cfg['dgx_host']}:{port}"
             print(f"  Chat UI  {cyan(chat_url)}  {dim('(open in browser)')}")
+            print(dim(f"  Next     spark llm bench {name}  (speed)  ·  "
+                      f"spark llm probe {name}  (capability)"))
             return {"action": "llm.serve", "model": name, "quant": quant,
                     "port": port, "status": "ready"}
         if any(m in low for m in FATAL):
@@ -564,8 +566,11 @@ def probe(params, cfg):
         if not params["model"]:
             print(fail("--serve needs a model name: ") + cyan("spark llm probe <model> --serve"))
             sys.exit(1)
+        # Probe sends one request at a time, so serve with a single slot: the
+        # smaller KV cache lets the largest models (e.g. Nemotron, which
+        # fit-refuses at the default --parallel 4) load for a probe.
         res = serve({"model": params["model"], "quant": params.get("quant"),
-                     "port": params["port"], "ctx": 8192, "parallel": 4,
+                     "port": params["port"], "ctx": 8192, "parallel": 1,
                      "free_comfy": False}, cfg)
         status, sport = res.get("status"), res.get("port")
         if status == "error":
