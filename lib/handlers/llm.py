@@ -147,20 +147,25 @@ def serve(params, cfg):
 
     session = f"llama-{port}"
     log_path = _port_log(cfg, port)
-    print(f"Loading {bold(name)}  {cyan(quant)}  on port {port}...")
+    mode = dim(" [no-think]") if params.get("no_think") else ""
+    print(f"Loading {bold(name)}  {cyan(quant)}{mode}  on port {port}...")
 
     # Newer llama.cpp builds are split into shared libs (libllama-server-impl.so
     # etc.) that ship beside the binary; the loader doesn't search a binary's own
     # directory, so point LD_LIBRARY_PATH there or the server dies with
     # "error while loading shared libraries". Harmless for self-contained builds.
     lib_dir = str(Path(cfg["server_bin"]).parent)
+    # Disable thinking for Qwen3.x / Gemma 4 etc. — passes the chat-template kwarg
+    # through to the jinja template (single-quoted JSON survives the ssh_screen
+    # → bash -c wrapping).
+    think = " --chat-template-kwargs '{\"enable_thinking\":false}'" if params.get("no_think") else ""
     serve_cmd = (
         f"LD_LIBRARY_PATH={lib_dir}${{LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}} "
         f"{cfg['server_bin']} "
         f"--model {model_path} "
         f"--port {port} --host 0.0.0.0 "
         f"--ctx-size {ctx} --n-gpu-layers 999 --parallel {par} "
-        f"--jinja --tools all "
+        f"--jinja --tools all{think} "
         f"2>&1 | tee {log_path}"
     )
     ssh_screen(cfg, session, serve_cmd)

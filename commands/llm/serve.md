@@ -13,7 +13,8 @@
     {"name": "port",     "type": "int",    "help": "Bind a specific port (default: next free from 30000)"},
     {"name": "ctx",      "type": "int", "default": 8192, "help": "Context window size"},
     {"name": "parallel", "type": "int", "default": 4,    "help": "Parallel request slots"},
-    {"name": "free_comfy", "type": "bool", "help": "If it won't fit, stop ComfyUI first to reclaim its memory"}
+    {"name": "free_comfy", "type": "bool", "help": "If it won't fit, stop ComfyUI first to reclaim its memory"},
+    {"name": "no_think", "type": "bool", "help": "Disable thinking/reasoning mode (chat-template enable_thinking=false) — for Qwen3.x / Gemma 4 'instruct' behavior"}
   ]
 }
 ```

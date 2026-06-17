@@ -11,7 +11,7 @@
     {"name": "model",   "positional": true, "help": "Loaded model to probe (default: the only loaded one)"},
     {"name": "port",    "type": "int",    "help": "Target a specific server port instead of by name"},
     {"name": "timeout", "type": "int",    "default": 180,  "help": "Seconds per request (local models can be slow)"},
-    {"name": "runs",    "type": "int",    "default": 1,    "help": "Runs per test (higher = consistency check)"},
+    {"name": "runs",    "type": "int",    "default": 5,    "help": "Runs per test; a test passes at >=80% pass rate. 5 is the smallest count where that tolerates one unlucky run (4/5); fewer is effectively all-or-nothing"},
     {"name": "tests",   "type": "string", "help": "Comma-separated subset of tests to run"},
     {"name": "model_id","type": "string", "help": "Override the model id sent to the endpoint (default: auto-discover)"},
     {"name": "report",  "type": "bool",   "help": "Show cached probe results instead of running a new probe"},
