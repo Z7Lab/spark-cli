@@ -33,7 +33,7 @@
       "response_time": "pass",
       "tool_call_large": "pass"
     },
-    "avg_response_ms": 1739,
+    "avg_response_ms": 1897,
     "measured": "2026-06-16"
   }
 }

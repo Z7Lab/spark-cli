@@ -5,16 +5,21 @@
   "footprint": "25G",
   "engine": {
     "name": "llama.cpp",
-    "build": "1738129bee5c81b06fa1850daf3f958813c76f5f"
+    "build": "74ade52741203e5c8f81eaf06a96cb1cfe15f2a3"
   },
   "host": "DGX Spark GB10, 128 GB",
   "updated": "2026-06-16",
   "speed": {
-    "tps_mean": 60.7,
+    "tps_mean": 61.6,
+    "tps_runs": [
+      61.6,
+      61.61
+    ],
     "runs": 2,
     "prompt": "make a python script to sort numbers",
-    "method": "server timings.predicted_per_second",
-    "measured": "2026-06-13"
+    "max_tokens": 2048,
+    "method": "server timings.predicted_per_second / wall-clock",
+    "measured": "2026-06-16"
   },
   "capability": {
     "summary": "7/8",
@@ -28,7 +33,7 @@
       "response_time": "pass",
       "tool_call_large": "pass"
     },
-    "avg_response_ms": 4274,
+    "avg_response_ms": 5123,
     "measured": "2026-06-16"
   }
 }
