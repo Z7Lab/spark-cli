@@ -14,10 +14,13 @@ own `timings.predicted_per_second` (generation only, excludes prefill/network),
 falling back to wall-clock tokens÷seconds when that's absent.
 
 **Capability** — `spark llm probe` checks whether a model actually works in an
-agent loop: valid tool calls, enum/argument constraints, and system-prompt
-adherence (via the optional [`llm-probe`](https://pypi.org/project/llm-probe/) —
-`pipx install llm-probe`). Speed without capability is a trap; a model can clear
-60 t/s and still fail to emit a usable tool call.
+agent loop, via the optional [`llm-probe`](https://pypi.org/project/llm-probe/)
+(`pipx install llm-probe`). It runs **8 checks** — valid tool call, enum/argument
+constraints, right-tool-among-many, large tool list, system-prompt adherence, no
+think-block leakage, no degenerate output, and response time — so a model scores
+`N/8`. See [llm-probe's TESTING.md](https://github.com/Z7Lab/LLM-probe/blob/main/TESTING.md)
+for exactly what each one checks. Speed without capability is a trap; a model can
+clear 60 t/s and still fail to emit a usable tool call.
 
 **Method:** prompt `make a python script to sort numbers`, `--ctx 8192`, 2 runs
 averaged, against a **pinned** engine — throughput is only comparable against a
