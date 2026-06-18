@@ -334,6 +334,12 @@ Key design choices — each is intentional, not accidental:
 - **Zero Python dependencies.** `bin/spark`, the `lib/` package (manifest loader, parser, handlers), `bin/hf_download.py`, and `tools/flatten_comfy_workflow.py` all use stdlib only. The few capabilities that need more are **opt-in, never forced**: the `image` verbs need Pillow, and `spark llm probe` shells out to the external [`llm-probe`](https://pypi.org/project/llm-probe/) tool (`pipx install llm-probe`) — each gated behind a clear hint if absent, so users only install what they actually use. The CLI runs on the operator's workstation, which can't assume a venv; shipping no deps means `pip install nothing` — clone and run.
 - **All service paths are configurable.** Every binary, log, and model directory is a config key in `~/.config/spark.json`. Relocating the whole stack (e.g. to `/opt/spark` under a `svc-spark` service account) is a config edit, not a code change.
 
+## Contributing
+
+Issues and pull requests welcome. See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the
+project layout, how to add a command (manifest + handler), the stdlib-only and
+docs conventions, and the local checks CI runs (all without a DGX).
+
 ## Config
 
 Config file: `~/.config/spark.json` (create with `spark init`, or copy

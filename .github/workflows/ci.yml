@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Byte-compile lib/ and bin/
+        run: python -m compileall -q lib bin
+
+      - name: Help + schema render for every command
+        run: |
+          python - <<'PY'
+          import sys, subprocess
+          sys.path.insert(0, "lib")
+          import manifest
+          entries = manifest.discover()
+          bad = 0
+          for e in entries:
+              spec = e["spec"]
+              argv = ["./bin/spark", spec["domain"]] \
+                  + ([spec["subcommand"]] if spec.get("subcommand") else []) \
+                  + ["--help"]
+              if subprocess.run(argv, capture_output=True).returncode:
+                  print("HELP FAIL:", " ".join(argv)); bad += 1
+              name = manifest.canonical_name(spec)
+              if subprocess.run(["./bin/spark", "_schema", name], capture_output=True).returncode:
+                  print("SCHEMA FAIL:", name); bad += 1
+          print(f"Audited {len(entries)} commands — {'ok' if not bad else str(bad) + ' failures'}")
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: Validate playbooks
+        run: |
+          for p in playbooks/*.md; do
+            name=$(basename "$p" .md)
+            [ "$name" = "playbook.example" ] && continue
+            ./bin/spark playbook check "$name" || exit 1
+          done
