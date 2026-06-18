@@ -133,13 +133,15 @@ def queue(params, cfg):
 
 
 def logs(params, cfg):
-    """Tail the ComfyUI container logs."""
+    """Show (or follow) the ComfyUI container logs."""
     compose_dir = cfg["comfy_dir"]
     lines = params["lines"]
-    print(dim(f"Tailing ComfyUI logs — Ctrl+C to stop\n"))
+    follow = "-f" if params.get("follow") else ""
+    if follow:
+        print(dim("Following ComfyUI logs — Ctrl+C to stop\n"))
     subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}",
-                    _docker_env(cfg) + f"cd {compose_dir} && docker compose logs --tail={lines} -f"])
-    return {"action": "comfy.logs", "port": _PORT}
+                    _docker_env(cfg) + f"cd {compose_dir} && docker compose logs --tail={lines} {follow}"])
+    return {"action": "comfy.logs", "port": cfg["comfy_port"], "followed": bool(follow)}
 
 
 def generate(params, cfg):
@@ -178,14 +180,41 @@ def generate(params, cfg):
 
     print(f"Generating  {dim(f'{width}x{height}, {steps} steps, guidance {guidance}, seed {seed}')}")
     print(f"  Prompt: {cyan(prompt)}")
-    try:
-        req = urllib.request.Request(base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
-                                     headers={"Content-Type": "application/json"})
-        pid = json.load(urllib.request.urlopen(req, timeout=60))["prompt_id"]
-    except urllib.error.HTTPError as e:
-        print(fail(f"ComfyUI rejected the request: {e.read().decode()[:600]}")); sys.exit(1)
-    except urllib.error.URLError as e:
-        print(fail(f"Cannot reach ComfyUI at {base} ({e.reason}).  Check: {cyan('spark comfy status')}")); sys.exit(1)
+    # ComfyUI can accept TCP connections before it's ready to serve (cold
+    # container, model load) and then drop them mid-response
+    # (http.client.RemoteDisconnected, an OSError that the old code didn't
+    # catch). Wait until a cheap endpoint answers cleanly before submitting, so
+    # a slow cold start doesn't crash the client or orphan a queued prompt.
+    print(dim("  Waiting for ComfyUI to be ready..."))
+    rdeadline = time.time() + 600
+    while time.time() < rdeadline:
+        try:
+            with urllib.request.urlopen(base + "/system_stats", timeout=10) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        print(fail(f"ComfyUI at {base} didn't become ready (10 min).  "
+                   f"Check: {cyan('spark comfy status')} / {cyan('spark comfy logs')}")); sys.exit(1)
+
+    # Submit; tolerate a connection dropped during the still-warming window. The
+    # readiness gate above makes a duplicate queue from a retry unlikely.
+    pid = None
+    for _ in range(5):
+        try:
+            req = urllib.request.Request(base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            pid = json.load(urllib.request.urlopen(req, timeout=120))["prompt_id"]
+            break
+        except urllib.error.HTTPError as e:
+            print(fail(f"ComfyUI rejected the request: {e.read().decode()[:600]}")); sys.exit(1)
+        except (urllib.error.URLError, OSError):
+            time.sleep(5)
+    if not pid:
+        print(fail(f"Couldn't submit to ComfyUI at {base} after retries.  "
+                   f"Check: {cyan('spark comfy status')} / {cyan('spark comfy logs')}")); sys.exit(1)
 
     print(dim("  Submitted — sampling (first run loads models into VRAM, a few min)..."))
     t0 = time.time()
@@ -205,8 +234,19 @@ def generate(params, cfg):
                 for im in node_out.get("images", []):
                     img = im
                     break
+                if img:
+                    break
             if img:
                 break
+            # The prompt is in /history (so it finished) but carries no image and
+            # no error: ComfyUI served an identical prompt from cache (~0s) and
+            # re-emitted no SaveImage output. Surface it now instead of polling to
+            # the 30-min timeout.
+            if st.get("completed") or st.get("status_str") == "success":
+                print("\n" + fail("ComfyUI finished the prompt but returned no image."))
+                print(dim("  Most likely an identical prompt served from cache (no new render)."))
+                print(f"  Re-run with a different {cyan('--seed')} (or omit it for a random one).")
+                sys.exit(1)
         print(f"\r  ...{int(time.time() - t0)}s", end="", flush=True)
     print()
     if not img:
