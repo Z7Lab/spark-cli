@@ -158,6 +158,25 @@ def generate(params, cfg):
     model    = params["model"]
     encoder  = params["encoder"]
     vae      = params["vae"]
+    init     = params.get("init")
+    inpaint  = params.get("inpaint")
+    region_str = params.get("region") or "0.4,0.4,0.55,0.6"
+    denoise  = params.get("denoise")
+    # img2img keeps more of the init the lower the denoise (0.65 default). Inpaint
+    # only repaints the masked region, so it fully regenerates it (denoise 1.0).
+    if init and inpaint and denoise is None:
+        denoise = 1.0
+    elif init and denoise is None:
+        denoise = 0.65
+    elif denoise is None:
+        denoise = 1.0
+    if inpaint:
+        if not init:
+            print(fail("--inpaint needs --init <image> (the image to repaint into)")); sys.exit(1)
+        try:
+            rx, ry, rw, rh = (float(v) for v in region_str.split(","))
+        except Exception:
+            print(fail("--region must be 'x,y,w,h' fractions, e.g. 0.4,0.4,0.55,0.6")); sys.exit(1)
 
     base = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
     graph = {
@@ -170,7 +189,7 @@ def generate(params, cfg):
         "7":  {"class_type": "CLIPTextEncode", "inputs": {"clip": ["3", 0], "text": ""}},
         "8":  {"class_type": "EmptySD3LatentImage", "inputs": {"width": width, "height": height, "batch_size": 1}},
         "9":  {"class_type": "KSampler", "inputs": {"model": ["2", 0], "positive": ["6", 0], "negative": ["7", 0], "latent_image": ["8", 0],
-                "seed": seed, "steps": steps, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+                "seed": seed, "steps": steps, "cfg": 1.0, "sampler_name": "euler", "scheduler": "simple", "denoise": denoise}},
         "10": {"class_type": "VAEDecode", "inputs": {"samples": ["9", 0], "vae": ["4", 0]}},
         "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "spark_gen"}},
     }
@@ -198,6 +217,53 @@ def generate(params, cfg):
     else:
         print(fail(f"ComfyUI at {base} didn't become ready (10 min).  "
                    f"Check: {cyan('spark comfy status')} / {cyan('spark comfy logs')}")); sys.exit(1)
+
+    # img2img: upload the init still, encode it to a latent, and sample from that
+    # at --denoise (keeps the source composition; the prompt edits it). Without
+    # --init the graph samples from an empty latent (plain text-to-image).
+    if init:
+        import uuid, mimetypes
+        ip = Path(init).expanduser()
+        if not ip.is_file():
+            print(fail(f"Init image not found: {init}")); sys.exit(1)
+        boundary = "----spark" + uuid.uuid4().hex
+        ictype = mimetypes.guess_type(str(ip))[0] or "application/octet-stream"
+        body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; "
+                f"filename=\"{ip.name}\"\r\nContent-Type: {ictype}\r\n\r\n").encode() + ip.read_bytes() + \
+               (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\n"
+                f"true\r\n--{boundary}--\r\n").encode()
+        up = None
+        for _ in range(5):
+            try:
+                up = json.load(urllib.request.urlopen(urllib.request.Request(
+                    base + "/upload/image", data=body,
+                    headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=120))
+                break
+            except (urllib.error.URLError, OSError):
+                time.sleep(5)
+        if up is None:
+            print(fail(f"Couldn't upload the init image to ComfyUI at {base}.")); sys.exit(1)
+        graph["12"] = {"class_type": "LoadImage", "inputs": {"image": up.get("name", ip.name)}}
+        if inpaint:
+            # Repaint only a rectangular region: scale the init to W×H, build a
+            # white box mask over the region on a black field, and noise-mask the
+            # latent so the sampler regenerates the box and keeps the rest exact.
+            W, H = width, height
+            bx, by, bw, bh = int(rx * W), int(ry * H), int(rw * W), int(rh * H)
+            graph["18"] = {"class_type": "ImageScale", "inputs": {"image": ["12", 0],
+                           "upscale_method": "lanczos", "width": W, "height": H, "crop": "center"}}
+            graph["13"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["18", 0], "vae": ["4", 0]}}
+            graph["14"] = {"class_type": "SolidMask", "inputs": {"value": 0.0, "width": W, "height": H}}
+            graph["15"] = {"class_type": "SolidMask", "inputs": {"value": 1.0, "width": bw, "height": bh}}
+            graph["16"] = {"class_type": "MaskComposite", "inputs": {"destination": ["14", 0],
+                           "source": ["15", 0], "x": bx, "y": by, "operation": "add"}}
+            graph["17"] = {"class_type": "SetLatentNoiseMask", "inputs": {"samples": ["13", 0], "mask": ["16", 0]}}
+            graph["9"]["inputs"]["latent_image"] = ["17", 0]
+            print(dim(f"  inpaint region {region_str} of {cyan(ip.name)}  (denoise {denoise})"))
+        else:
+            graph["13"] = {"class_type": "VAEEncode", "inputs": {"pixels": ["12", 0], "vae": ["4", 0]}}
+            graph["9"]["inputs"]["latent_image"] = ["13", 0]
+            print(dim(f"  img2img from {cyan(ip.name)}  (denoise {denoise})"))
 
     # Submit; tolerate a connection dropped during the still-warming window. The
     # readiness gate above makes a duplicate queue from a retry unlikely.
