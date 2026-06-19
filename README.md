@@ -45,7 +45,7 @@ spark llm probe [<model>] [--serve --unload]      Verify tool-calling & prompt a
 spark llm reports [--out F]                        Render saved bench+probe results (reports/) as a Markdown table
 
 # Image / video generation
-spark comfy <start|stop|status|logs>              Manage AEON-Spark ComfyUI (port 8188)
+spark comfy <start|stop|status|logs|queue>        Manage AEON-Spark ComfyUI (port 8188)
 spark comfy generate "<prompt>"                   FLUX.2 text-to-image, downloads the PNG
 spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
 spark comfy qr-art <url> [--style --mode]         Scannable QR-code art (ControlNet)
