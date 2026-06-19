@@ -285,6 +285,22 @@ def animate(params, cfg):
     graph = json.loads(tmpl.read_text())
     base = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
 
+    # ComfyUI can accept connections before it's ready and drop them mid-response
+    # during a cold model load — wait until it answers cleanly before uploading.
+    print(dim("  Waiting for ComfyUI to be ready..."))
+    rdeadline = time.time() + 600
+    while time.time() < rdeadline:
+        try:
+            with urllib.request.urlopen(base + "/system_stats", timeout=10) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        print(fail(f"ComfyUI at {base} didn't become ready (10 min).  "
+                   f"Check: {cyan('spark comfy status')} / {cyan('spark comfy logs')}")); sys.exit(1)
+
     # 1) upload the still to ComfyUI's input folder (multipart)
     boundary = "----spark" + uuid.uuid4().hex
     ctype = mimetypes.guess_type(str(p))[0] or "application/octet-stream"
@@ -292,13 +308,17 @@ def animate(params, cfg):
             f"filename=\"{p.name}\"\r\nContent-Type: {ctype}\r\n\r\n").encode() + p.read_bytes() + \
            (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\n"
             f"true\r\n--{boundary}--\r\n").encode()
-    try:
-        up = json.load(urllib.request.urlopen(urllib.request.Request(
-            base + "/upload/image", data=body,
-            headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=60))
-    except urllib.error.URLError as e:
-        print(fail(f"Cannot reach ComfyUI at {base} ({getattr(e, 'reason', e)}).  Check: {cyan('spark comfy status')}"))
-        sys.exit(1)
+    up = None
+    for _ in range(5):
+        try:
+            up = json.load(urllib.request.urlopen(urllib.request.Request(
+                base + "/upload/image", data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=120))
+            break
+        except (urllib.error.URLError, OSError):
+            time.sleep(5)
+    if up is None:
+        print(fail(f"Couldn't upload the still to ComfyUI at {base}.  Check: {cyan('spark comfy status')}")); sys.exit(1)
     uploaded = up.get("name", p.name)
 
     # 2) inject image + prompt + seed into the frozen graph
@@ -314,12 +334,19 @@ def animate(params, cfg):
     print(f"Animating  {cyan(p.name)}  {dim('(LTX-2.3 i2v — sampling + upscale + decode, a few min)')}")
     print(f"  Prompt: {cyan(prompt)}")
     print(f"  Seed:   {seed}  {dim('(reproduce this take with --seed ' + str(seed) + ')')}")
-    try:
-        pid = json.load(urllib.request.urlopen(urllib.request.Request(
-            base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
-            headers={"Content-Type": "application/json"}), timeout=60))["prompt_id"]
-    except urllib.error.HTTPError as e:
-        print(fail(f"ComfyUI rejected the workflow: {e.read().decode()[:700]}")); sys.exit(1)
+    pid = None
+    for _ in range(5):
+        try:
+            pid = json.load(urllib.request.urlopen(urllib.request.Request(
+                base + "/prompt", data=json.dumps({"prompt": graph}).encode(),
+                headers={"Content-Type": "application/json"}), timeout=120))["prompt_id"]
+            break
+        except urllib.error.HTTPError as e:
+            print(fail(f"ComfyUI rejected the workflow: {e.read().decode()[:700]}")); sys.exit(1)
+        except (urllib.error.URLError, OSError):
+            time.sleep(5)
+    if not pid:
+        print(fail(f"Couldn't submit to ComfyUI at {base} after retries.  Check: {cyan('spark comfy status')}")); sys.exit(1)
     print(dim("  Submitted — first run loads ~44G of LTX models into VRAM..."))
 
     t0 = time.time(); vid = None
@@ -341,6 +368,11 @@ def animate(params, cfg):
                             vid = v
             if vid:
                 break
+            # Finished but no video — e.g. an identical prompt+seed served from cache.
+            if st.get("completed") or st.get("status_str") == "success":
+                print("\n" + fail("ComfyUI finished but returned no video."))
+                print(dim("  Likely an identical prompt+seed served from cache."))
+                print(f"  Re-run with a different {cyan('--seed')}."); sys.exit(1)
         print(f"\r  ...{int(time.time() - t0)}s", end="", flush=True)
     print()
     if not vid:
