@@ -19,6 +19,19 @@ from sparkcore import (
 # --set generate`. Lives in ComfyUI's models/loras/ like any other LoRA.
 _TURBO_LORA = "Flux2TurboComfyv2.safetensors"
 
+# `generate --base` model profiles: which UNET / text-encoder / VAE to load. Both use
+# the flux2 CLIP type. FLUX.2-dev (default, fp8) is what the box serves; klein-4B is the
+# Apache-2.0 base `spark train` defaults to — so klein LoRAs render here too.
+# Fetch a profile's files with `comfy pull-models --set <its set>`.
+_BASES = {
+    "flux2-dev":      {"model": "flux2_dev_fp8mixed.safetensors",
+                       "encoder": "mistral_3_small_flux2_bf16.safetensors",
+                       "vae": "flux2-vae.safetensors", "set": "generate"},
+    "flux2-klein-4b": {"model": "flux-2-klein-base-4b.safetensors",
+                       "encoder": "qwen_3_4b.safetensors",
+                       "vae": "flux2-vae.safetensors", "set": "generate-klein"},
+}
+
 def start(params, cfg):
     """Start AEON-Spark ComfyUI via docker compose (port 8188)."""
     compose_dir = cfg["comfy_dir"]
@@ -158,9 +171,14 @@ def generate(params, cfg):
     height   = params["height"]
     seed     = params["seed"] if params["seed"] is not None else random.randint(1, 2**31 - 1)
     out      = params["out"]
-    model    = params["model"]
-    encoder  = params["encoder"]
-    vae      = params["vae"]
+    base     = params.get("base") or "flux2-dev"
+    prof     = _BASES.get(base)
+    if prof is None:
+        print(fail(f"Unknown --base '{base}'. Options: {', '.join(_BASES)}")); sys.exit(1)
+    # --base picks the UNET/encoder/VAE; explicit --model/--encoder/--vae still override.
+    model    = params["model"]   or prof["model"]
+    encoder  = params["encoder"] or prof["encoder"]
+    vae      = params["vae"]     or prof["vae"]
     init     = params.get("init")
     inpaint  = params.get("inpaint")
     lora     = params.get("lora")
@@ -168,9 +186,12 @@ def generate(params, cfg):
     if lora_strength is None:
         lora_strength = 1.0
     # --turbo applies a few-step distilled LoRA and drops the step/guidance defaults
-    # (the "distillation" speed lever — near-real-time gen). Explicit --steps/
-    # --guidance still win (they default to null so we can tell they were set).
+    # (the "distillation" speed lever). FLUX.2-dev only — the turbo LoRA is a dev LoRA;
+    # there's no klein turbo. Explicit --steps/--guidance still win (null = unset).
     turbo    = params.get("turbo")
+    if turbo and base != "flux2-dev":
+        print(warn(f"--turbo is FLUX.2-dev only (no klein turbo LoRA) — ignoring for base '{base}'."))
+        turbo = False
     steps    = params["steps"]    if params["steps"]    is not None else (8   if turbo else 20)
     guidance = params["guidance"] if params["guidance"] is not None else (1.5 if turbo else 3.5)
     region_str = params.get("region") or "0.4,0.4,0.55,0.6"
@@ -379,7 +400,7 @@ def generate(params, cfg):
     Path(out).write_bytes(data)
     print(ok(f"Image saved: {cyan(out)}  {dim(f'({len(data)//1024} KB, {int(time.time() - t0)}s)')}"))
     print(f"  On DGX: {dim(cfg['comfy_dir'] + '/workspace/output/' + img['filename'])}")
-    return {"action": "comfy.generate", "out": out, "seed": seed,
+    return {"action": "comfy.generate", "out": out, "seed": seed, "base": base,
             "width": width, "height": height, "steps": steps, "turbo": bool(turbo),
             "lora": lora, "lora_strength": lora_strength if lora else None,
             "bytes": len(data), "filename": img["filename"]}

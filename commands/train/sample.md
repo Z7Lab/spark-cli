@@ -19,11 +19,12 @@
 }
 ```
 
-Generates images from a **trained LoRA** without retraining — the way to see a
-**klein**-base LoRA's output, since `spark comfy generate` only serves FLUX.2-dev for
-now. It runs ai-toolkit's `generate` job in the training container: loads the run's
-base model + the trained LoRA (`model.lora_path`, pure inference — the LoRA is not
-modified), renders your prompts, and downloads the JPGs to your workstation.
+Generates images from a **trained LoRA** without retraining — an alternative to
+`spark comfy generate --base flux2-klein-4b --lora <name>` that renders straight from a
+run without switching the comfy base (handy right after training). It runs ai-toolkit's
+`generate` job in the training container: loads the run's base model + the trained LoRA
+(`model.lora_path`, pure inference — the LoRA is not modified), renders your prompts,
+and downloads the JPGs to your workstation.
 
 The base model + arch are read from the run's own config, and the newest checkpoint
 (the final `<name>.safetensors`) is used. Put the run's **trigger word** in each prompt.

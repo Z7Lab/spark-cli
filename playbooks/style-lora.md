@@ -113,17 +113,17 @@ Repeat resume across as many time-boxed sessions as it takes; the run is **compl
 
 ## use
 
-Two ways, depending on the base. Put the **trigger word** in the prompt either way.
+Put the **trigger word** in the prompt. Match the base to the LoRA's training base:
 
-- **Any base (incl. the default klein) — `spark train sample`:** renders prompts from
-  the trained LoRA via ai-toolkit (loads base + LoRA, pure inference), downloads images:
+- **`spark comfy generate --lora`** — render in the main ComfyUI path (fast, warm,
+  supports `--init`/`--inpaint`). A **klein** LoRA (the default training base) needs
+  `--base flux2-klein-4b` (after a one-time `comfy pull-models --set generate-klein`);
+  a **dev** LoRA uses the default base:
+
+      spark comfy generate "<trigger> a harbor at dawn" --base flux2-klein-4b --lora <name>.safetensors
+      spark comfy generate "<trigger> a lighthouse on a cliff" --lora <name>.safetensors   # dev
+
+- **`spark train sample`** — renders prompts from the trained LoRA via ai-toolkit (loads
+  the run's base + LoRA, pure inference) straight from a run, no base switch needed:
 
       spark train sample "<trigger> a busy harbor at dawn, boats, gulls" --name <name>
-
-- **dev-trained LoRA — `spark comfy generate --lora`:** loads it straight into ComfyUI:
-
-      spark comfy generate "<trigger> a lighthouse on a cliff" --lora <name>.safetensors
-
-`comfy generate` currently serves **FLUX.2-dev (fp8)** only, so a **klein** LoRA (the
-default) goes through `spark train sample` for now (wiring klein into `comfy generate`
-is a tracked follow-up).

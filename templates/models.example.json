@@ -85,6 +85,29 @@
         "rename": "control_v1p_sd15_brightness.safetensors",
         "label": "Brightness ControlNet"
       }
+    ],
+    "generate-klein": [
+      {
+        "repo_id": "fwwrsd/comfy-org-flux2-klein-4b",
+        "glob": "flux-2-klein-base-4b.safetensors",
+        "subdir": "diffusion_models",
+        "flat": true,
+        "label": "FLUX.2-klein-4B DiT (comfy single-file; Apache-2.0)"
+      },
+      {
+        "repo_id": "fwwrsd/comfy-org-flux2-klein-4b",
+        "glob": "qwen_3_4b.safetensors",
+        "subdir": "text_encoders",
+        "flat": true,
+        "label": "Qwen3-4B text encoder for FLUX.2-klein"
+      },
+      {
+        "repo_id": "fwwrsd/comfy-org-flux2-klein-4b",
+        "glob": "flux2-vae.safetensors",
+        "subdir": "vae",
+        "flat": true,
+        "label": "FLUX.2 VAE (shared)"
+      }
     ]
   },
   "tts": {

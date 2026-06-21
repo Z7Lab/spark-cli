@@ -16,12 +16,13 @@ at `http://<dgx-host>:8188` and downloads results to your workstation.
 spark comfy generate "a red fox in a snowy forest at dawn"
 spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
 spark comfy generate "a red fox in a snowy forest" --turbo            # few-step, ~seconds
-spark comfy generate "mystylexr a lighthouse" --lora my-art-style.safetensors # trained style LoRA
+spark comfy generate "mystylexr a lighthouse" --lora my-art-style.safetensors # trained style LoRA (dev base)
+spark comfy generate "mystylexr a harbor at dawn" --base flux2-klein-4b --lora my-art-style.safetensors # klein LoRA
 ```
 Flat FLUX.2 graph built inline in the comfy handler (`lib/handlers/comfy.py`).
 First run loads the models into the GB10's unified memory (a few min); then
 ~30–60 s each (seconds with `--turbo`).
-Options: `--width --height --steps --guidance --seed --out --model --encoder --vae`.
+Options: `--base --lora --turbo --width --height --steps --guidance --seed --out --model --encoder --vae`.
 
 - **`--init <img>` / `--denoise`** — image-to-image (edit an existing image, keeping
   its composition). **`--inpaint --region x,y,w,h`** — repaint only a region.
@@ -190,6 +191,9 @@ no token required.
 | `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `vae/flux2-vae.safetensors` |
 | `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `text_encoders/mistral_3_small_flux2_bf16.safetensors` |
 | `generate` (`--turbo`) | `Comfy-Org/flux2-dev` | `loras/Flux2TurboComfyv2.safetensors` |
+| `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `diffusion_models/flux-2-klein-base-4b.safetensors` |
+| `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `text_encoders/qwen_3_4b.safetensors` |
+| `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `vae/flux2-vae.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3-fp8` | `checkpoints/ltx-2.3-22b-dev-fp8.safetensors` |
 | `animate` (LTX-2.3) | `Comfy-Org/ltx-2` | `text_encoders/gemma_3_12B_it_fp4_mixed.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `loras/ltx-2.3-22b-distilled-lora-384.safetensors` |

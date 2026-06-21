@@ -135,8 +135,11 @@ reaches `--steps`. On completion the latest checkpoint is published into ComfyUI
 ## 4. Generate with the LoRA
 
 ```bash
+# dev-trained LoRA (FLUX.2-dev is the default base):
 spark comfy generate "mystylexr a lighthouse on a cliff at dusk" --lora my-art-style.safetensors
-spark comfy generate "mystylexr a portrait, studio light" --lora my-art-style.safetensors --lora-strength 0.8
+# klein-trained LoRA (the default training base) — switch comfy to the klein base:
+spark comfy pull-models --set generate-klein            # once
+spark comfy generate "mystylexr a busy harbor at dawn" --base flux2-klein-4b --lora my-art-style.safetensors
 ```
 
 The LoRA loads as a single `LoraLoaderModelOnly` spliced between the FLUX.2 UNET
@@ -144,20 +147,19 @@ loader and `ModelSamplingFlux` (FLUX.2 style LoRAs are model-only). Put the **tr
 word** in the prompt; `--lora-strength` (default 1.0) scales the effect. The name is
 validated against ComfyUI's own LoRA list, so a typo fails fast with the choices.
 
+> **Match the base to the LoRA's training base.** A **dev** LoRA loads on the default
+> base; a **klein** LoRA needs `--base flux2-klein-4b` (after `comfy pull-models --set
+> generate-klein`). `--turbo` is FLUX.2-dev only.
+
 You can also drop any FLUX.2 `.safetensors` LoRA into
 `{comfy_dir}/workspace/models/loras/` and use it the same way.
 
-> **Inference base must match the training base.** `spark comfy generate` currently
-> serves **FLUX.2-dev (fp8)**, so only a **dev**-trained LoRA loads there. For a
-> **klein** LoRA (the default), use `spark train sample` (below), which renders through
-> ai-toolkit on the matching klein base. (Wiring klein into `comfy generate` is a
-> tracked follow-up.)
+### Alternative — `spark train sample` (render via the trainer)
 
-### Render prompts from any trained LoRA — `spark train sample`
-
-Works for **any** base (klein or dev) — it runs ai-toolkit's `generate` job in the
-training container, loading the run's base + the trained LoRA (pure inference, the LoRA
-is not modified), and downloads the images:
+Also works for **any** base, straight from a run without switching the comfy base — it
+runs ai-toolkit in the training container, loading the run's base + the trained LoRA
+(pure inference, the LoRA is not modified), and downloads the images. Handy right after
+training; `comfy generate --base` is faster for repeated/warm iteration.
 
 ```bash
 spark train sample "mystylexr a busy harbor at dawn, boats, crates, gulls" --name my-art-style
@@ -167,7 +169,7 @@ spark train sample "mystylexr a dragon over a city" "mystylexr a quiet cafe" --s
 Put the trigger word in each prompt; pass several prompts to render them all. Images
 land in `./<name>-samples/` (or `--out <dir>`). The base/arch are taken from the run's
 own config and the final `<name>.safetensors` is used. First run loads the base into
-VRAM (a few min). This is the way to use a klein LoRA today.
+VRAM (a few min).
 
 ---
 

@@ -21,10 +21,11 @@
     {"name": "region",   "type": "string", "help": "Inpaint box as x,y,w,h fractions 0-1 (default 0.4,0.4,0.55,0.6 = lower-right)"},
     {"name": "lora",          "type": "string", "help": "Style/subject LoRA in models/loras (e.g. from `spark train`); put its trigger word in the prompt"},
     {"name": "lora_strength", "type": "float",  "default": 1.0, "help": "LoRA weight: 1.0 full effect, lower for a subtler nudge"},
-    {"name": "turbo",         "type": "bool",   "help": "Few-step distilled FLUX.2 LoRA for near-real-time gen (lowers steps→8, guidance→1.5; stacks with --lora). Needs: comfy pull-models --set generate"},
-    {"name": "model",    "type": "string", "default": "flux2_dev_fp8mixed.safetensors", "help": "Diffusion model"},
-    {"name": "encoder",  "type": "string", "default": "mistral_3_small_flux2_bf16.safetensors", "help": "Text encoder"},
-    {"name": "vae",      "type": "string", "default": "flux2-vae.safetensors", "help": "VAE"}
+    {"name": "turbo",         "type": "bool",   "help": "Few-step distilled FLUX.2 LoRA for near-real-time gen (lowers steps→8, guidance→1.5; stacks with --lora; FLUX.2-dev only). Needs: comfy pull-models --set generate"},
+    {"name": "base",     "type": "string", "options": ["flux2-dev", "flux2-klein-4b"], "default": "flux2-dev", "help": "Base model: flux2-dev (default, fp8) or flux2-klein-4b (Apache-2.0 — for klein-trained LoRAs). Needs: comfy pull-models --set generate-klein"},
+    {"name": "model",    "type": "string", "help": "Override the diffusion model file (default: from --base)"},
+    {"name": "encoder",  "type": "string", "help": "Override the text encoder file (default: from --base)"},
+    {"name": "vae",      "type": "string", "help": "Override the VAE file (default: from --base)"}
   ]
 }
 ```
@@ -48,7 +49,12 @@ ComfyUI's own LoRA list, so a typo fails fast with the available names.
 near-real-time speed lever) and drops the defaults to 8 steps / 1.5 guidance, so a
 gen takes seconds instead of ~a minute. It **stacks with `--lora`** (turbo for speed
 + your style), and explicit `--steps`/`--guidance` still win. Fetch the turbo LoRA
-once with `spark comfy pull-models --set generate`.
+once with `spark comfy pull-models --set generate`. (FLUX.2-dev only.)
+
+`--base flux2-klein-4b` switches the graph to the **klein-4B** base (Apache-2.0,
+and renders here (`--lora <name>`, trigger in the prompt). It swaps the UNET + text
+encoder (Qwen3) + VAE; `--lora`/`--init`/`--inpaint` work the same (no `--turbo`, which
+is a dev LoRA). Fetch it once with `spark comfy pull-models --set generate-klein`.
 
 Examples:
 
@@ -59,3 +65,4 @@ Examples:
     spark comfy generate "mystylexr a lighthouse on a cliff" --lora my-art-style.safetensors --lora-strength 0.9
     spark comfy generate "a red fox in a snowy forest" --turbo
     spark comfy generate "mystylexr a lighthouse" --turbo --lora my-art-style.safetensors
+    spark comfy generate "mystylexr a harbor at dawn" --base flux2-klein-4b --lora my-art-style.safetensors
