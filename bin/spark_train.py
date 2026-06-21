@@ -177,6 +177,10 @@ def main() -> int:
     # also means it ran to the configured steps. Anything else is a resumable pause.
     if final_step >= args.target_steps or (rc == 0 and not stop_requested):
         status = "complete"
+        # ai-toolkit writes the final checkpoint unsuffixed (<name>.safetensors), which
+        # _latest_step can't read a step from — so on completion the run is at the
+        # target, not the last *suffixed* checkpoint. Report the target.
+        final_step = max(final_step, args.target_steps)
     elif stop_requested or stop_reason:
         status = "paused"
     else:
