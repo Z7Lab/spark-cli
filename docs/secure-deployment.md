@@ -209,3 +209,6 @@ Own the supply chain — all four layers:
   the key decisions (rootless Docker + CDI, supply-chain pipeline, least-privilege
   service account) are each explained inline in their respective sections above.
 - [README.md](../README.md) — the configurable service paths and the Troubleshooting table.
+- [training.md](training.md) — `spark train`'s ai-toolkit image is operator-provided and
+  digest-pinned, and runs under the **same rootless-Docker + CDI** setup as the ComfyUI
+  image (§3), so the hardening here applies to it unchanged.

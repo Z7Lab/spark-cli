@@ -1,0 +1,69 @@
+# ai-toolkit (ostris) FLUX.2 style-LoRA job — TEMPLATE.
+#
+# `spark train start` renders this by substituting the @@...@@ placeholders and
+# drops the result at {train_dir}/configs/<name>.yaml, which the watchdog passes to
+# ai-toolkit's run.py inside the training container. The paths below are the
+# in-container mount points from compose.yaml.
+#
+# Resume across time-boxed sessions is automatic: ai-toolkit picks up from the
+# latest checkpoint in training_folder, and `save_every` bounds how much a clean
+# stop can lose (~one interval). Keep save_every frequent (the plan's ~15-20 min).
+---
+job: extension
+config:
+  name: "@@NAME@@"
+  process:
+    - type: "sd_trainer"
+      training_folder: "/workspace/output"
+      device: cuda:0
+      trigger_word: "@@TRIGGER@@"
+      network:
+        type: "lora"
+        linear: @@RANK@@
+        linear_alpha: @@RANK@@
+      save:
+        dtype: float16
+        save_every: @@SAVE_EVERY@@
+        max_step_saves_to_keep: 1000   # keep every checkpoint → always resumable
+      datasets:
+        - folder_path: "/workspace/datasets/@@NAME@@"
+          caption_ext: "txt"           # sidecar captions; trigger word carries the style
+          caption_dropout_rate: 0.05
+          shuffle_tokens: false
+          cache_latents_to_disk: true
+          resolution: [@@RESOLUTION@@]
+      train:
+        batch_size: 1
+        steps: @@STEPS@@
+        gradient_accumulation_steps: 1
+        train_unet: true
+        train_text_encoder: false      # FLUX.2 style LoRA is model-only
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16
+      model:
+        # ai-toolkit fetches the base from HF into the container's cache. Default
+        # klein-4B is Apache-2.0 / ungated (no token); its text encoder (Qwen3-4B)
+        # and VAE come with the arch. FLUX.2-dev (arch flux2) is gated + needs an
+        # HF token — set it in {train_dir}/.env (see docs/training.md).
+        name_or_path: "@@BASE_MODEL@@"
+        arch: "@@ARCH@@"
+        quantize: @@QUANTIZE@@         # 4B fits unquantized; quantize the 32B dev base
+      sample:
+        sampler: "flowmatch"
+        sample_every: @@SAVE_EVERY@@
+        width: 1024
+        height: 1024
+        prompts:
+          - "@@TRIGGER@@ a portrait, studio lighting"
+          - "@@TRIGGER@@ a landscape at golden hour"
+        neg: ""
+        seed: 42
+        walk_seed: true
+        guidance_scale: 4
+        sample_steps: 20
+meta:
+  name: "@@NAME@@"
+  version: "1.0"

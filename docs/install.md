@@ -88,6 +88,19 @@ spark comfy start      # pulls the digest-pinned image and starts it
 spark comfy status     # prints the UI URL when ready
 ```
 
+## 4b. DGX — ai-toolkit image (optional, for `spark train`)
+
+Style-LoRA training runs in a dedicated, **operator-provided** ai-toolkit container —
+spark drives it like the ComfyUI image (pulls it, never builds it). Point spark at a
+GB10/sm_121-ready image:
+
+```bash
+spark config set aitoolkit_image <image>   # build one from templates/train/Dockerfile.reference
+```
+
+`spark train start` pulls it on first run. Full guide (corpus prep, base-model choice +
+licensing, resume-in-chunks): [training.md](training.md).
+
 ## 5. Models
 
 Pull what each service needs from the catalog ([`templates/models.json`](../templates/models.example.json)):

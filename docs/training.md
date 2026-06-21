@@ -1,0 +1,187 @@
+# Spark style-LoRA training (FLUX.2)
+
+Train a FLUX.2 **style LoRA** from a corpus of images on the DGX Spark. spark
+provides the **framework** — the trainer, the time-boxed/resumable session control,
+and the inference wiring; the corpus and its rights are **yours**.
+
+> **Base model & licensing — pick deliberately.** The default base is
+> own works and **sell** the results freely. **FLUX.2-dev is gated and
+
+Training runs [ai-toolkit (ostris)](https://github.com/ostris/ai-toolkit) in a
+**dedicated** container, driven through a detached `screen` session over SSH, exactly
+like `spark llm serve`. As with the ComfyUI image, spark **drives an operator-
+provided, digest-pinned** ai-toolkit image — it does not build or vendor one — so
+ai-toolkit's brittle GPU dep tree (torch / flash-attn / torchcodec on sm_121) stays
+out of this repo. spark deploys only the orchestration (compose + watchdog).
+
+> While a training session is live the box does **only** training — no concurrent
+> serving. That's deliberate: the GB10's unified memory is shared, so training gets
+> full horsepower and there's no OOM-while-serving contention.
+
+---
+
+## 0. Prerequisites
+
+- Docker usable on the DGX (`spark comfy status` confirms the daemon; same engine).
+- The **base model** is fetched by ai-toolkit on first run into the container's HF
+  cache — nothing to pre-download. The default **klein-4B is Apache/ungated (no
+  token)**; see [Base model](#base-model) to switch bases.
+- An **ai-toolkit container image** for the GB10/sm_121 — operator-provided and
+  digest-pinned, exactly like the ComfyUI image (spark drives it, never builds it):
+
+  ```bash
+  spark config set aitoolkit_image <image@sha256:…>   # a GB10/sm_121-ready image
+  ```
+
+  `spark train start` pulls it on first run. To build your own, see
+  [../templates/train/Dockerfile.reference](../templates/train/Dockerfile.reference);
+  the image contract is just: `python3` on PATH and ai-toolkit's `run.py` present
+  (default `/opt/ai-toolkit/run.py`; override with `AITOOLKIT_RUN` in `{train_dir}/.env`).
+
+## 1. Prepare a corpus
+
+A directory of **style-consistent** images you are cleared to use. Recipe:
+
+- ~20–60 images at roughly 1024px on the long edge.
+- Caption each image's **content** in a sidecar `<image>.txt` (same basename):
+  describe the subject/composition/setting, *not* the style. The **trigger word**
+  carries the style, so the model learns "style = the trigger" rather than baking the
+  style into content words.
+
+  ```
+  corpus/
+    01.png   01.txt   →  "a woman standing by a window, half-light"
+    02.png   02.txt   →  "a harbour at dawn, boats at anchor"
+  ```
+
+- No captions yet? Pass `--auto-caption` to generate the sidecars from a served
+  vision model (`spark llm serve <vlm>` first); the trigger word is prepended for you.
+
+## 2. Train (time-boxed, resumable)
+
+```bash
+spark train start ~/corpora/my-style --trigger mystyle --max-hours 3
+```
+
+What happens: the corpus is staged to the DGX, an ai-toolkit config is rendered from
+[../templates/train/aitoolkit_config.yaml](../templates/train/aitoolkit_config.yaml),
+and the watchdog launches the run in the `spark-train` screen session. It checkpoints
+every `--save-every` steps (default 250) and, once `--max-hours` elapses, **stops
+cleanly just after the next checkpoint** — never mid-save — so a session lasts about
+the budget and loses at most one interval.
+
+Useful flags (`spark train start --help` for all):
+
+| Flag | Default | Meaning |
+|------|---------|---------|
+| `--trigger` | (required) | Word that invokes the style; put it in the prompt at inference |
+| `--name` | corpus folder name | Run / output LoRA name |
+| `--max-hours` | `3` | Per-session time budget (`0` = run straight to the target) |
+| `--steps` | `2000` | Total training steps — the completion target across all sessions |
+| `--save-every` | `250` | Checkpoint cadence (a clean stop loses ≤ one interval) |
+| `--rank` | `16` | LoRA rank/dim — higher = more capacity + bigger file |
+| `--auto-caption` | off | Caption missing images via a served vision model first |
+
+## 3. Watch, pause, resume
+
+```bash
+spark train status                 # status, step N/target, ETA, whether a session is live
+spark train status --logs          # follow the live ai-toolkit output
+spark train pause                  # stop cleanly after the next checkpoint (resumable)
+spark train resume [--max-hours N] # continue from the latest checkpoint, another chunk
+```
+
+Resume picks up from the latest checkpoint and trains another `--max-hours` chunk.
+Repeat `resume` across as many sessions as it takes; the run is **complete** when it
+reaches `--steps`. On completion the latest checkpoint is published into ComfyUI's
+`models/loras/` as `<name>.safetensors`.
+
+## 4. Generate with the LoRA
+
+```bash
+spark comfy generate "mystyle a lighthouse on a cliff at dusk" --lora mystyle.safetensors
+spark comfy generate "mystyle a portrait, studio light" --lora mystyle.safetensors --lora-strength 0.8
+```
+
+The LoRA loads as a single `LoraLoaderModelOnly` spliced between the FLUX.2 UNET
+loader and `ModelSamplingFlux` (FLUX.2 style LoRAs are model-only). Put the **trigger
+word** in the prompt; `--lora-strength` (default 1.0) scales the effect. The name is
+validated against ComfyUI's own LoRA list, so a typo fails fast with the choices.
+
+You can also drop any FLUX.2 `.safetensors` LoRA into
+`{comfy_dir}/workspace/models/loras/` and use it the same way.
+
+> **Inference base must match the training base.** `spark comfy generate` currently
+> serves **FLUX.2-dev (fp8)**, so a **dev**-trained LoRA loads directly. A **klein**-
+> trained LoRA needs klein inference (not yet wired into `comfy generate`) — for now,
+> inspect a klein run's results via ai-toolkit's own **sample images** (written under
+> `{train_dir}/output/<name>/samples/` each `--save-every`). Matching klein inference
+> is tracked as a follow-up.
+
+---
+
+## Base model
+
+ai-toolkit fetches the base from HuggingFace on first run (into the mounted HF cache);
+spark just sets `name_or_path` + `arch` in the rendered config.
+
+| Base | `train_base_model` / `train_arch` | License | Token? |
+|------|-----------------------------------|---------|--------|
+
+Switch base:
+
+```bash
+spark train start ~/corpora/my-style --trigger mystyle
+
+spark config set train_base_model black-forest-labs/FLUX.2-dev
+spark config set train_arch flux2
+HF_TOKEN=hf_xxx spark train start ~/corpora/my-style --trigger mystyle
+```
+
+For a gated base, `HF_TOKEN` (from spark's environment) is written into
+`{train_dir}/.env` and passed to the container — the same "gated → token on the box"
+path documented under `spark download`. The default klein-4B base needs none of this.
+
+## How it fits together
+
+| Piece | Where |
+|-------|-------|
+| Host-side verbs (deploy, stage, launch, control, publish) | [../lib/handlers/train.py](../lib/handlers/train.py) |
+| In-container watchdog (time-budget safe-stop, checkpoint detection) | [../bin/spark_train.py](../bin/spark_train.py) |
+| Orchestration deployed to the box (compose + ai-toolkit config template) | [../templates/train/](../templates/train/) |
+| Build-your-own image reference (NOT built by spark) | [../templates/train/Dockerfile.reference](../templates/train/Dockerfile.reference) |
+| Inference wiring (`--lora`) | `generate()` in [../lib/handlers/comfy.py](../lib/handlers/comfy.py) |
+| Config keys (`train_dir`, `train_base_model`, `train_arch`, `aitoolkit_image`) | [../lib/sparkcore.py](../lib/sparkcore.py) |
+
+Remote layout under `{train_dir}` (default `~/spark-train`):
+
+```
+compose.yaml  bin/spark_train.py               # deployed orchestration (no Dockerfile)
+datasets/<name>/   configs/<name>.yaml         # staged corpus + rendered config
+output/<name>/     state/<name>.json           # checkpoints + run state
+output/<name>/samples/                         # ai-toolkit sample images per checkpoint
+control/<name>/stop   logs/<name>.log          # pause flag + session log
+.env                                           # AITOOLKIT_IMAGE (+ HF_TOKEN only for a gated base)
+cache/huggingface/                             # base model + text encoder, fetched by ai-toolkit
+```
+
+> The base model is **not** stored in the repo or pre-staged — ai-toolkit downloads it
+> into the mounted HF cache on first run. The default klein-4B base is ungated (no
+> token); only a gated base (klein-9B / dev) needs `HF_TOKEN`.
+
+## Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `Couldn't obtain the ai-toolkit image` | `aitoolkit_image` unset/unreachable | `spark config set aitoolkit_image <image@sha256:…>` (GB10/sm_121-ready), or build one from `Dockerfile.reference` and point spark at it |
+| Image runs but training errors immediately | image lacks ai-toolkit at the expected path | set `AITOOLKIT_RUN=<path to run.py>` in `{train_dir}/.env` |
+| `Cannot train — Docker is not usable` | daemon down / permission | same remedy as `spark comfy` — see the README Troubleshooting table |
+| Base download 401/403 | gated base (dev / klein-9B) without a token | accept the license on HF and re-run with `HF_TOKEN=…`, or use the default klein-4B (ungated) |
+| `state_dict` unexpected `*.weight_scale` keys | base is an fp8 checkpoint (e.g. comfy's `flux2_dev_fp8mixed`) | use a bf16 base via `train_base_model` (a HF repo), not an fp8 file — ai-toolkit fine-tunes full-precision weights |
+| `LoRA '<name>' is not in models/loras` at generate | not published / typo | `spark train status <name>` (publishes on complete), or check the loras dir |
+| Run won't resume | no checkpoint saved yet | needs ≥ one checkpoint (`--save-every` steps); check `spark train status --logs` |
+
+> The ai-toolkit `model:` block is rendered from `train_base_model` + `train_arch`
+> (default klein-4B). If a future ai-toolkit changes its arch names or config schema,
+> adjust [../templates/train/aitoolkit_config.yaml](../templates/train/aitoolkit_config.yaml)
+> — it's a plain template the handler only does token substitution on.

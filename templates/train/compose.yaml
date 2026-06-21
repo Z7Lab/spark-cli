@@ -1,0 +1,57 @@
+# Dedicated ai-toolkit training stack for `spark train`.
+#
+# Like the ComfyUI stack, spark does NOT build or vendor this image — it drives an
+# operator-provided, digest-pinned ai-toolkit image (AITOOLKIT_IMAGE in .env, from
+# cfg.aitoolkit_image). That keeps ai-toolkit's brittle GPU dep tree (torch /
+# flash-attn / torchcodec on sm_121) out of this repo: someone pins a working image
+# once, spark just runs it.
+#
+# Runs ONLY during a dedicated training session (the box does nothing else while
+# training). Host dirs are bind-mounted (relative to this file's location, i.e.
+# {train_dir}) so checkpoints, the generated config, and run state survive across
+# the time-boxed sessions = resume.
+#
+# `spark train` deploys this verbatim into {train_dir} and runs the watchdog with
+#   docker compose run --rm trainer /workspace/bin/spark_train.py ...
+# inside a detached screen session on the host (like `serve`).
+
+services:
+  trainer:
+    image: ${AITOOLKIT_IMAGE}
+    # GPU via CDI (nvidia.com/gpu=all) — the rootless-Docker pattern the ComfyUI
+    # stack uses on the DGX Spark; NOT legacy `runtime: nvidia` (unregistered under
+    # rootless). Exposes the full unified-memory fabric.
+    devices:
+      - nvidia.com/gpu=all
+    # Inject {train_dir}/.env into the container. It always has AITOOLKIT_IMAGE, and
+    # HF_TOKEN ONLY for a gated base (the FLUX.2-dev opt-in). Using env_file (not a
+    # `HF_TOKEN=${HF_TOKEN:-}` line) means the token is simply absent for the default
+    # ungated klein-4B base — never an empty "Bearer " header that breaks HF downloads.
+    env_file:
+      - .env
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - HF_HOME=/cache/huggingface
+      # Where ai-toolkit's entrypoint lives inside the image. Override in .env if a
+      # different image lays it out elsewhere; the watchdog reads this.
+      - AITOOLKIT_RUN=${AITOOLKIT_RUN:-/opt/ai-toolkit/run.py}
+    shm_size: "32gb"
+    ipc: host
+    ulimits:
+      # memlock: -1 omitted — rootless Docker cannot raise RLIMIT_MEMLOCK past the
+      # user's limit (rlimit type 8: operation not permitted), matching the ComfyUI stack.
+      stack: 67108864
+    volumes:
+      - ./datasets:/workspace/datasets
+      - ./configs:/workspace/configs
+      - ./output:/workspace/output
+      - ./state:/workspace/state
+      - ./control:/workspace/control
+      - ./bin:/workspace/bin
+      - ./cache/huggingface:/cache/huggingface
+    working_dir: /workspace
+    # spark drives this image with `docker compose run`, overriding the entrypoint so
+    # the watchdog runs regardless of the image's own entrypoint.
+    entrypoint: ["python3"]
+    command: ["-c", "import time; time.sleep(2**31)"]

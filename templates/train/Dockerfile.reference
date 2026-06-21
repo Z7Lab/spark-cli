@@ -1,0 +1,79 @@
+# OPTIONAL REFERENCE — spark does NOT build this image.
+#
+# `spark train` drives an operator-provided, digest-pinned ai-toolkit image
+# (cfg.aitoolkit_image), exactly like it drives the operator-provided, digest-pinned
+# ComfyUI image — so ai-toolkit's brittle GPU dep tree stays OUT of this repo. This
+# file is here only for an operator who wants to build their own GB10/sm_121 image
+# instead of pulling one. Build it, push/tag it, and point spark at it:
+#
+#   docker build -t my-aitoolkit:gb10 -f Dockerfile.reference .
+#   spark config set aitoolkit_image my-aitoolkit:gb10      # ideally a @sha256: digest
+#
+# The image contract spark relies on: python3 on PATH, ai-toolkit's run.py present
+# (default /opt/ai-toolkit/run.py; override with AITOOLKIT_RUN in {train_dir}/.env),
+# and a torch that runs on sm_121.
+#
+# GB10/aarch64 recipe (from ai-toolkit's own DGX path + the community DGX Spark ML
+# guide — see Sources). The key lessons, learned the hard way:
+#   • Use a recent NGC base (25.10-py3) whose torch is built for sm_120/121 — older
+#     tags (25.03) and generic torch wheels lack GB10 kernels.
+#   • Clear PIP_CONSTRAINT or ai-toolkit's pins (setuptools==69.5.1) hit
+#     ResolutionImpossible against NGC's curated stack.
+#   • Do NOT let pip replace NGC's torch: strip torch/vision/audio pins, and prefer
+#     ai-toolkit's dgx_requirements.txt (ARM64 scipy/tifffile/opencv). The generic
+#     requirements.txt pins deps with no sbsa wheel (observed: torchcodec==0.9.1).
+#   • No flash-attn 3 on CUDA 13; FA2 or torch sdpa is fine.
+#   • Pin AITOOLKIT_REF to a known-good commit, not `main`.
+#
+# Sources: ai-toolkit dgx_requirements.txt / dgx_instructions.md;
+#          github.com/martimramos/dgx-spark-ml-guide
+
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.10-py3
+FROM ${BASE_IMAGE}
+
+ARG AITOOLKIT_REF=main
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/cache/huggingface \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_CONSTRAINT=""
+
+# libgl1 + libglib2.0-0: ai-toolkit imports cv2 (opencv-python), which needs
+# libGL.so.1 / libgthread — absent from the slim NGC image.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git git-lfs ca-certificates libgl1 libglib2.0-0 && \
+    rm -rf /var/lib/apt/lists/* && git lfs install
+
+WORKDIR /opt
+RUN git clone https://github.com/ostris/ai-toolkit.git && \
+    cd ai-toolkit && git checkout ${AITOOLKIT_REF} && \
+    git submodule update --init --recursive
+
+WORKDIR /opt/ai-toolkit
+# Keep NGC's sm_121 torch and drop torchcodec (pins ==0.9.1, no aarch64/py3.12 wheel;
+# video-only, irrelevant to image style-LoRA). These pins live in requirements.txt
+# AND its `-r requirements_base.txt` include, so strip across ALL requirements*.txt
+# before installing.
+RUN pip install --upgrade pip && \
+    sed -i -E '/^(torch|torchvision|torchaudio|torchcodec)([=<>! ]|$)/d' requirements*.txt && \
+    pip install -r requirements.txt
+
+# torchaudio is imported at module load by ai-toolkit but only *used* in audio/video
+# dataset code — never for image style-LoRA. NGC's image doesn't ship it and a
+# matching aarch64 build for its torch isn't reliable, so stub it (image-only image).
+RUN python3 <<'PY'
+import site, os
+p = os.path.join(site.getsitepackages()[0], "torchaudio.py")
+open(p, "w").write(
+    'class _S:\n'
+    '    def __getattr__(self, n):\n'
+    '        raise RuntimeError("torchaudio is stubbed in this image (image-only training)")\n'
+    'functional = _S()\n'
+    'transforms = _S()\n'
+    'def load(*a, **k): raise RuntimeError("torchaudio stubbed")\n'
+    'def save(*a, **k): raise RuntimeError("torchaudio stubbed")\n'
+)
+print("stubbed torchaudio ->", p)
+PY
+
+WORKDIR /workspace
+ENTRYPOINT ["python3"]
