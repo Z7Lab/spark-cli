@@ -32,7 +32,10 @@ A memory pre-flight warns if ComfyUI or llama-servers are still resident in the
 shared unified memory (training then contends for it); pass `--free` to stop them
 first and give training the whole box (opt-in — never automatic).
 
-plus an `HF_TOKEN`). ai-toolkit downloads the base on first run. See docs/training.md.
+The base model defaults to **FLUX.2-klein-4B** (Apache-2.0, ungated, no token).
+FLUX.2-dev is a gated opt-in (`spark config set train_base_model …` + `train_arch
+flux2`, plus an `HF_TOKEN`). ai-toolkit downloads the base on first run. See
+docs/training.md for the base table + license links.
 
 The session is **time-boxed and resumable**: `--max-hours` auto-stops the run
 cleanly just after the next checkpoint once the budget elapses, and

@@ -4,8 +4,12 @@ Train a FLUX.2 **style LoRA** from a corpus of images on the DGX Spark. spark
 provides the **framework** — the trainer, the time-boxed/resumable session control,
 and the inference wiring; the corpus and its rights are **yours**.
 
-> **Base model & licensing — pick deliberately.** The default base is
-> own works and **sell** the results freely. **FLUX.2-dev is gated and
+> **Base model.** The default is **FLUX.2-klein-4B**
+> ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated,
+> no token). **FLUX.2-dev**
+> ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) is a gated opt-in and
+> needs an `HF_TOKEN`. Review each model's license for your own use. See
+> [Base model](#base-model) below.
 
 Training runs [ai-toolkit (ostris)](https://github.com/ostris/ai-toolkit) in a
 **dedicated** container, driven through a detached `screen` session over SSH, exactly
@@ -154,6 +158,10 @@ validated against ComfyUI's own LoRA list, so a typo fails fast with the choices
 You can also drop any FLUX.2 `.safetensors` LoRA into
 `{comfy_dir}/workspace/models/loras/` and use it the same way.
 
+klein nails style but is weak on **text/fine detail** — refine the keepers through a
+stronger model with [`spark comfy refine`](../commands/comfy/refine.md) (img2img @
+denoise 0.5, FLUX.2-dev).
+
 ### Alternative — `spark train sample` (render via the trainer)
 
 Also works for **any** base, straight from a run without switching the comfy base — it
@@ -178,14 +186,21 @@ VRAM (a few min).
 ai-toolkit fetches the base from HuggingFace on first run (into the mounted HF cache);
 spark just sets `name_or_path` + `arch` in the rendered config.
 
+Review each model's license (linked) for your own use.
+
 | Base | `train_base_model` / `train_arch` | License | Token? |
 |------|-----------------------------------|---------|--------|
+| **klein-4B** (default) | `black-forest-labs/FLUX.2-klein-base-4B` / `flux2_klein_4b` | [Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B) | no |
+| klein-9B | `black-forest-labs/FLUX.2-klein-base-9B` / `flux2_klein_9b` | [license](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B) (gated) | yes |
+| FLUX.2-dev (32B) | `black-forest-labs/FLUX.2-dev` / `flux2` | [license](https://huggingface.co/black-forest-labs/FLUX.2-dev) (gated) | yes |
 
 Switch base:
 
 ```bash
+# default — ungated, no token, nothing to set
 spark train start ~/lora-training/my-art-style --trigger mystylexr
 
+# FLUX.2-dev (gated): accept its license on HF, then:
 spark config set train_base_model black-forest-labs/FLUX.2-dev
 spark config set train_arch flux2
 HF_TOKEN=hf_xxx spark train start ~/lora-training/my-art-style --trigger mystylexr

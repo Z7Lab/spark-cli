@@ -47,6 +47,7 @@ spark llm reports [--out F]                        Render saved bench+probe resu
 # Image / video generation
 spark comfy <start|stop|status|logs|queue>        Manage AEON-Spark ComfyUI (port 8188)
 spark comfy generate "<prompt>" [--lora N] [--base B] [--turbo]  FLUX.2 text-to-image (+ trained LoRA; --base flux2-klein-4b for klein LoRAs; --turbo = few-step)
+spark comfy refine <image> ["<prompt>"]           Re-run an image through a stronger model (fix text/detail; img2img @ denoise 0.5)
 spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
 spark comfy qr-art <url> [--style --mode]         Scannable QR-code art (ControlNet)
 spark comfy pull-models [--set generate|generate-klein|animate|qr-art|all]  Download the models those commands need
@@ -245,10 +246,13 @@ its rights are **yours** — spark provides the framework, not the content.
 `--auto-caption` fills in missing captions from a served vision model
 (`spark llm serve <vlm>`).
 
-**Base model & licensing (read this).** The default base is **FLUX.2-klein-4B —
-own works and **sell** the results. ai-toolkit fetches it (and its Qwen3-4B text
-encoder) automatically. **FLUX.2-dev is an opt-in** (`spark config set train_base_model
-`HF_TOKEN` on the box (the gated path). Pick the base that matches your use.
+**Base model.** The default base is **FLUX.2-klein-4B**
+([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated, no
+token); ai-toolkit fetches it (and its Qwen3-4B text encoder) automatically.
+**FLUX.2-dev** ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) is an
+opt-in (`spark config set train_base_model black-forest-labs/FLUX.2-dev` + `train_arch
+flux2`): it's gated and needs an `HF_TOKEN` on the box. Review each model's license for
+your own use.
 
 Set a GB10/sm_121-compatible ai-toolkit image with `spark config set aitoolkit_image
 <image@sha256:…>`; spark pulls it on first run (build-your-own reference:

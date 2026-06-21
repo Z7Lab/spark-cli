@@ -276,7 +276,7 @@ def start(params, cfg):
     if "black-forest-labs/FLUX.2-dev" in cfg["train_base_model"] and not os.environ.get("HF_TOKEN"):
         print(warn("Base is the gated FLUX.2-dev but no HF_TOKEN is set."))
         print(dim("  Accept its license on HF, then re-run with HF_TOKEN=… (the default klein-4B "
-                  "base is Apache/ungated and needs no token).  See docs/training.md."))
+                  "base is ungated and needs no token).  See docs/training.md."))
 
     missing = [f for f in imgs if not f.with_suffix(".txt").exists()]
     print(bold(f"Train LoRA '{name}'") + dim(f"  ({len(imgs)} images, trigger '{trigger}')"))

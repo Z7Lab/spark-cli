@@ -51,7 +51,8 @@ gen takes seconds instead of ~a minute. It **stacks with `--lora`** (turbo for s
 + your style), and explicit `--steps`/`--guidance` still win. Fetch the turbo LoRA
 once with `spark comfy pull-models --set generate`. (FLUX.2-dev only.)
 
-`--base flux2-klein-4b` switches the graph to the **klein-4B** base (Apache-2.0,
+`--base flux2-klein-4b` switches the graph to the **klein-4B** base (Apache-2.0) — the
+base `spark train` defaults to — so a **klein-trained LoRA** loads
 and renders here (`--lora <name>`, trigger in the prompt). It swaps the UNET + text
 encoder (Qwen3) + VAE; `--lora`/`--init`/`--inpaint` work the same (no `--turbo`, which
 is a dev LoRA). Fetch it once with `spark comfy pull-models --set generate-klein`.
