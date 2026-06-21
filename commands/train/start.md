@@ -45,6 +45,6 @@ On completion the LoRA is published into ComfyUI's `models/loras/` as
 
 Examples:
 
-    spark train start ~/corpora/my-style --trigger mystyle
-    spark train start ~/art --trigger inkwash --steps 3000 --max-hours 2 --rank 32
-    spark train start ~/art --trigger inkwash --auto-caption
+    spark train start ~/lora-training/my-art-style --trigger mystylexr
+    spark train start ~/lora-training/my-art-style --trigger mystylexr --steps 3000 --max-hours 2 --rank 32
+    spark train start ~/lora-training/my-art-style --trigger mystylexr --auto-caption

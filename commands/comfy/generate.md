@@ -56,6 +56,6 @@ Examples:
     spark comfy generate "neon city street" --width 1280 --height 720 --steps 25
     spark comfy generate "the same landscape under autumn foliage" --init photo.png --denoise 0.5
     spark comfy generate "a hot air balloon in the sky" --init photo.png --inpaint --region 0.3,0.1,0.4,0.4
-    spark comfy generate "mystyle a lighthouse on a cliff" --lora mystyle.safetensors --lora-strength 0.9
+    spark comfy generate "mystylexr a lighthouse on a cliff" --lora my-art-style.safetensors --lora-strength 0.9
     spark comfy generate "a red fox in a snowy forest" --turbo
-    spark comfy generate "mystyle a lighthouse" --turbo --lora mystyle.safetensors
+    spark comfy generate "mystylexr a lighthouse" --turbo --lora my-art-style.safetensors

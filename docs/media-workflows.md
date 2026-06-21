@@ -16,7 +16,7 @@ at `http://<dgx-host>:8188` and downloads results to your workstation.
 spark comfy generate "a red fox in a snowy forest at dawn"
 spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
 spark comfy generate "a red fox in a snowy forest" --turbo            # few-step, ~seconds
-spark comfy generate "mystyle a lighthouse" --lora mystyle.safetensors # trained style LoRA
+spark comfy generate "mystylexr a lighthouse" --lora my-art-style.safetensors # trained style LoRA
 ```
 Flat FLUX.2 graph built inline in the comfy handler (`lib/handlers/comfy.py`).
 First run loads the models into the GB10's unified memory (a few min); then

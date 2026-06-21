@@ -57,10 +57,43 @@ A directory of **style-consistent** images you are cleared to use. Recipe:
 - No captions yet? Pass `--auto-caption` to generate the sidecars from a served
   vision model (`spark llm serve <vlm>` first); the trigger word is prepended for you.
 
+**Where to put it.** Any directory works — just put the images (and captions) in one
+folder named for the style. A tidy convention on your workstation:
+
+```
+~/lora-training/
+  my-art-style/    # <- point `spark train start` at this folder
+    01.jpg  01.txt
+    02.jpg  02.txt
+    ...
+```
+
+(That folder is the "corpus" the commands refer to — it just means *your set of
+training images*.)
+
+### Naming — the two names you make up
+
+You choose two names. **Both are yours to invent** — they are not spark internals, repos,
+or anything the tools already know:
+
+- **`--name <name>`** — a plain label for this run, like `my-art-style`. It becomes the
+  **LoRA filename** (`my-art-style.safetensors`) and the on-box run folder, and it
+  **defaults to the corpus folder name**. Use a **distinct name per run**, or a fresh
+  run will resume/overwrite an earlier one of the same name.
+- **`--trigger <word>`** — the word you'll **type in prompts** to switch the style on
+  (`"a lighthouse mystylexr"`). Make it **one made-up token the model has never seen**,
+  so your style binds cleanly to it. Avoid real words like `watercolor` or `noir` — the
+  model already has its *own* idea of those, which muddies yours. Good triggers are
+  coined/unique: `mystylexr`, `artzbk`, or a readable name with an odd tag like
+  `myartstyle7`.
+
+So a run might be `--name my-art-style --trigger mystylexr` — a readable file label, and
+a unique nonsense trigger. If you omit `--name`, the corpus folder name is used.
+
 ## 2. Train (time-boxed, resumable)
 
 ```bash
-spark train start ~/corpora/my-style --trigger mystyle --max-hours 3
+spark train start ~/lora-training/my-art-style --trigger mystylexr --max-hours 3
 ```
 
 What happens: the corpus is staged to the DGX, an ai-toolkit config is rendered from
@@ -99,8 +132,8 @@ reaches `--steps`. On completion the latest checkpoint is published into ComfyUI
 ## 4. Generate with the LoRA
 
 ```bash
-spark comfy generate "mystyle a lighthouse on a cliff at dusk" --lora mystyle.safetensors
-spark comfy generate "mystyle a portrait, studio light" --lora mystyle.safetensors --lora-strength 0.8
+spark comfy generate "mystylexr a lighthouse on a cliff at dusk" --lora my-art-style.safetensors
+spark comfy generate "mystylexr a portrait, studio light" --lora my-art-style.safetensors --lora-strength 0.8
 ```
 
 The LoRA loads as a single `LoraLoaderModelOnly` spliced between the FLUX.2 UNET
@@ -131,11 +164,11 @@ spark just sets `name_or_path` + `arch` in the rendered config.
 Switch base:
 
 ```bash
-spark train start ~/corpora/my-style --trigger mystyle
+spark train start ~/lora-training/my-art-style --trigger mystylexr
 
 spark config set train_base_model black-forest-labs/FLUX.2-dev
 spark config set train_arch flux2
-HF_TOKEN=hf_xxx spark train start ~/corpora/my-style --trigger mystyle
+HF_TOKEN=hf_xxx spark train start ~/lora-training/my-art-style --trigger mystylexr
 ```
 
 For a gated base, `HF_TOKEN` (from spark's environment) is written into

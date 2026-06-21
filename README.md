@@ -232,7 +232,7 @@ compose + watchdog) and pulls the image on first run.
 ```bash
 # Point at a folder of style-consistent images you're cleared to use (~20–60 @ ~1024).
 # Caption each image's CONTENT in a sidecar <image>.txt; the trigger word carries the style.
-spark train start ~/corpora/my-style --trigger mystyle --max-hours 3
+spark train start ~/lora-training/my-art-style --trigger mystylexr --max-hours 3
 spark train status                                   # progress, ETA, live session
 spark train pause                                    # stop cleanly after the next checkpoint
 spark train resume                                   # continue from there, another time-boxed chunk

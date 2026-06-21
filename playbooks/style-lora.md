@@ -77,10 +77,18 @@ torchcodec/torchaudio handling, libGL). The first `spark train start` pulls the 
 Collect the **corpus** path and a **trigger** word. Recipe for a good style LoRA:
 
 - ~20-60 **style-consistent** images at roughly 1024px (a handful underfits — the style
-  won't imprint; that's the difference between a smoke test and a real run).
+  won't imprint; that's the difference between a smoke test and a real run). Put them in
+  one folder named for the style, e.g. `~/lora-training/my-art-style/` (point `start` at
+  it — that folder is the "corpus", i.e. your set of training images).
 - Caption each image's **content** in a sidecar `<image>.txt` (e.g. `a lighthouse by the
   sea`) — *not* the style. The trigger word carries the style. Missing captions: pass
   `--auto-caption` to generate them from a served vision model (`spark llm serve <vlm>`).
+- **Two names you make up** (both yours to invent — not spark internals or repos):
+  `--name` is a plain label like `my-art-style` → the LoRA file `my-art-style.safetensors`
+  (use a fresh one per run so it doesn't resume/overwrite); `--trigger` is the word you
+  type in prompts to invoke the style — make it a **made-up token the model has never
+  seen** (`mystylexr`, `artzbk`), *not* a real word like `watercolor`/`noir` (the model
+  already knows those, which muddies your style).
 - The corpus and its rights are the user's responsibility.
 
 ## train
