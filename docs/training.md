@@ -16,7 +16,9 @@ out of this repo. spark deploys only the orchestration (compose + watchdog).
 
 > While a training session is live the box does **only** training — no concurrent
 > serving. That's deliberate: the GB10's unified memory is shared, so training gets
-> full horsepower and there's no OOM-while-serving contention.
+> full horsepower and there's no OOM-while-serving contention. `spark train start`
+> runs a memory pre-flight and warns if ComfyUI or llama-servers are still resident;
+> pass `--free` to stop them first (opt-in).
 
 ---
 
@@ -114,6 +116,7 @@ Useful flags (`spark train start --help` for all):
 | `--save-every` | `250` | Checkpoint cadence (a clean stop loses ≤ one interval) |
 | `--rank` | `16` | LoRA rank/dim — higher = more capacity + bigger file |
 | `--auto-caption` | off | Caption missing images via a served vision model first |
+| `--free` | off | Stop resident ComfyUI / llama-servers first, so training owns the box |
 
 ## 3. Watch, pause, resume
 

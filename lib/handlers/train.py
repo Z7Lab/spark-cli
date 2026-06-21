@@ -27,6 +27,7 @@ from pathlib import Path
 from sparkcore import (
     REPO_ROOT, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen, _docker_env, docker_probe, print_docker_remedy,
+    _free_bytes, _comfy_mem_bytes, _llm_instances, _human,
 )
 
 TRAIN_SESSION = "spark-train"          # one dedicated session: the box trains, nothing else
@@ -244,6 +245,30 @@ def start(params, cfg):
     if state != "ok":
         print(fail("Cannot train — Docker is not usable on the DGX:"))
         print_docker_remedy(cfg, state); sys.exit(1)
+
+    # Memory pre-flight: training wants the dedicated box (the GB10's unified memory is
+    # shared). If ComfyUI or llama-servers are resident, surface it; --free stops them
+    # first (opt-in, never automatic — mirrors `llm serve --free-comfy`).
+    comfy_mem = _comfy_mem_bytes(cfg)
+    llm_insts = _llm_instances(cfg)
+    if comfy_mem or llm_insts:
+        holders = ([f"ComfyUI (~{_human(comfy_mem)})"] if comfy_mem else []) + \
+                  ([f"{len(llm_insts)} llama-server(s)"] if llm_insts else [])
+        if params.get("free"):
+            print(warn(f"Freeing the box for training — stopping {', '.join(holders)}…"))
+            if comfy_mem:
+                from . import comfy as _comfy
+                _comfy.stop({}, cfg)
+            if llm_insts:
+                from . import llm as _llm
+                _llm.stop({}, cfg)
+            import time as _t; _t.sleep(2)
+            print(dim(f"  {_human(_free_bytes(cfg))} free now."))
+        else:
+            print(warn(f"Box isn't dedicated to training — {', '.join(holders)} resident "
+                       f"({_human(_free_bytes(cfg))} free)."))
+            print(dim("  Training shares unified memory (slower / OOM risk). Free it with ")
+                  + cyan("--free") + dim(", or `spark comfy stop` / `spark llm stop`."))
 
     # ai-toolkit fetches the base model itself on first run (into the mounted HF
     # cache). Warn if a gated base is configured without a token in the environment.

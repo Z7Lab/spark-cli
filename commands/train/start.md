@@ -16,7 +16,8 @@
     {"name": "save_every", "type": "int",   "default": 250,  "help": "Checkpoint every N steps — a clean stop loses at most one interval"},
     {"name": "rank",       "type": "int",   "default": 16,   "help": "LoRA rank (network dim); higher = more capacity + larger file"},
     {"name": "resolution", "type": "int",   "default": 1024, "help": "Training resolution"},
-    {"name": "auto_caption","type": "bool", "help": "Caption images missing a .txt via a served vision model (spark llm serve <vlm>) before training"}
+    {"name": "auto_caption","type": "bool", "help": "Caption images missing a .txt via a served vision model (spark llm serve <vlm>) before training"},
+    {"name": "free",        "type": "bool", "help": "Free the box for training first — stop ComfyUI and any llama-servers holding unified memory (opt-in)"}
   ]
 }
 ```
@@ -26,6 +27,10 @@ detached `screen` session on the DGX — the box does only training while this r
 (no concurrent serving). spark drives an **operator-provided, digest-pinned**
 ai-toolkit image (`spark config set aitoolkit_image …`, like the ComfyUI image) and
 pulls it on first run; it does not build one.
+
+A memory pre-flight warns if ComfyUI or llama-servers are still resident in the
+shared unified memory (training then contends for it); pass `--free` to stop them
+first and give training the whole box (opt-in — never automatic).
 
 plus an `HF_TOKEN`). ai-toolkit downloads the base on first run. See docs/training.md.
 
