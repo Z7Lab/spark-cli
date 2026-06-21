@@ -55,6 +55,7 @@ spark comfy pull-models [--set generate|animate|qr-art|all]  Download the models
 spark train start <corpus> --trigger <word>       Train a FLUX.2 style LoRA from a corpus of images
             [--max-hours N --steps N --auto-caption]    time-boxed, resumable; publishes to comfy loras
 spark train <status|pause|resume> [name]          Watch progress / stop after a checkpoint / continue
+spark train sample "<prompt>" [--name N]          Render prompts from a trained LoRA (inference, no retrain)
 
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)

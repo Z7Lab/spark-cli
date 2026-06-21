@@ -148,11 +148,26 @@ You can also drop any FLUX.2 `.safetensors` LoRA into
 `{comfy_dir}/workspace/models/loras/` and use it the same way.
 
 > **Inference base must match the training base.** `spark comfy generate` currently
-> serves **FLUX.2-dev (fp8)**, so a **dev**-trained LoRA loads directly. A **klein**-
-> trained LoRA needs klein inference (not yet wired into `comfy generate`) — for now,
-> inspect a klein run's results via ai-toolkit's own **sample images** (written under
-> `{train_dir}/output/<name>/samples/` each `--save-every`). Matching klein inference
-> is tracked as a follow-up.
+> serves **FLUX.2-dev (fp8)**, so only a **dev**-trained LoRA loads there. For a
+> **klein** LoRA (the default), use `spark train sample` (below), which renders through
+> ai-toolkit on the matching klein base. (Wiring klein into `comfy generate` is a
+> tracked follow-up.)
+
+### Render prompts from any trained LoRA — `spark train sample`
+
+Works for **any** base (klein or dev) — it runs ai-toolkit's `generate` job in the
+training container, loading the run's base + the trained LoRA (pure inference, the LoRA
+is not modified), and downloads the images:
+
+```bash
+spark train sample "mystylexr a busy harbor at dawn, boats, crates, gulls" --name my-art-style
+spark train sample "mystylexr a dragon over a city" "mystylexr a quiet cafe" --seed 7 --steps 25
+```
+
+Put the trigger word in each prompt; pass several prompts to render them all. Images
+land in `./<name>-samples/` (or `--out <dir>`). The base/arch are taken from the run's
+own config and the final `<name>.safetensors` is used. First run loads the base into
+VRAM (a few min). This is the way to use a klein LoRA today.
 
 ---
 

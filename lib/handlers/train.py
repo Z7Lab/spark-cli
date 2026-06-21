@@ -436,26 +436,143 @@ def status(params, cfg):
             "state": st, "published": published}
 
 
+def _latest_lora(cfg: dict, name: str) -> str | None:
+    """Remote path of the run's newest LoRA checkpoint, or None.
+
+    Prefers ai-toolkit's final, unsuffixed `<name>.safetensors` (the completed
+    weights); it sorts BEFORE step-suffixed intermediates ('.' < '_'), so a naive
+    sort|tail would wrongly pick the last intermediate — pick the final explicitly.
+    """
+    p = _paths(cfg, name)
+    out = shlex.quote(p["output"])
+    fin = shlex.quote(f"{p['output']}/{name}.safetensors")
+    latest = ssh(cfg, f"if [ -f {fin} ]; then echo {fin}; else "
+                      f"ls -1 {out}/*.safetensors 2>/dev/null | grep -v -i optimizer | sort | tail -1; fi").strip()
+    return latest or None
+
+
 def _publish(cfg: dict, name: str) -> str | None:
     """Copy the latest checkpoint into ComfyUI's models/loras as <name>.safetensors.
 
     Idempotent: re-publishing an already-current LoRA is a no-op copy. Returns the
     remote LoRA path, or None if no checkpoint exists yet.
     """
-    p = _paths(cfg, name)
-    loras = _loras_dir(cfg)
-    out = shlex.quote(p["output"])
-    # Prefer ai-toolkit's final, unsuffixed `<name>.safetensors` (the completed
-    # weights). It sorts BEFORE the step-suffixed intermediates ('.' < '_'), so a
-    # naive sort|tail would wrongly pick the last intermediate — pick it explicitly.
-    fin = shlex.quote(f"{p['output']}/{name}.safetensors")
-    latest = ssh(cfg, f"if [ -f {fin} ]; then echo {fin}; else "
-                      f"ls -1 {out}/*.safetensors 2>/dev/null | grep -v -i optimizer | sort | tail -1; fi").strip()
+    latest = _latest_lora(cfg, name)
     if not latest:
         return None
+    loras = _loras_dir(cfg)
     target = f"{loras}/{name}.safetensors"
     ssh(cfg, f"mkdir -p {shlex.quote(loras)} && cp -f {shlex.quote(latest)} {shlex.quote(target)}")
     return target
+
+
+def _run_values(cfg: dict, name: str) -> dict:
+    """Read what re-sampling needs from the run's own config (authoritative): base,
+    arch, LoRA rank, trigger, dataset path, resolution, quantize. Falls back to cfg."""
+    raw = ssh(cfg, f"cat {shlex.quote(_paths(cfg, name)['config'])} 2>/dev/null || true")
+    v: dict = {}
+    keymap = {"name_or_path:": "base", "arch:": "arch", "trigger_word:": "trigger",
+              "linear:": "rank", "folder_path:": "dataset", "quantize:": "quantize"}
+    for line in raw.splitlines():
+        s = line.strip()
+        for key, field in keymap.items():
+            if s.startswith(key):
+                v[field] = s.split(":", 1)[1].strip().strip('"')
+        if s.startswith("resolution:"):
+            v["resolution"] = (s.split(":", 1)[1].strip().strip("[]").split(",")[0].strip() or "1024")
+    v.setdefault("base", cfg["train_base_model"])
+    v.setdefault("arch", cfg["train_arch"])
+    v.setdefault("rank", "16")
+    v.setdefault("trigger", "style")
+    v.setdefault("dataset", f"/workspace/datasets/{name}")
+    v.setdefault("resolution", "1024")
+    v.setdefault("quantize", "false" if "klein" in v["arch"] else "true")
+    return v
+
+
+def _render_sample_config(cfg, name, prompts, v, lora_path, width, height, steps, seed) -> Path:
+    tmpl = (_ASSETS / "aitoolkit_generate.yaml").read_text()
+    prompt_block = "".join('          - "' + p.replace('\\', '\\\\').replace('"', '\\"') + '"\n'
+                           for p in prompts).rstrip("\n")
+    subs = {
+        "@@NAME@@": name, "@@TRIGGER@@": v["trigger"], "@@RANK@@": v["rank"],
+        "@@LORA_PATH@@": lora_path, "@@DATASET@@": v["dataset"], "@@RESOLUTION@@": v["resolution"],
+        "@@BASE_MODEL@@": v["base"], "@@ARCH@@": v["arch"], "@@QUANTIZE@@": v["quantize"],
+        "@@WIDTH@@": str(width), "@@HEIGHT@@": str(height), "@@STEPS@@": str(steps),
+        "@@SEED@@": str(seed), "@@PROMPTS@@": prompt_block,
+    }
+    for k, val in subs.items():
+        tmpl = tmpl.replace(k, val)
+    p = Path("/tmp") / f"spark_sample_{name}.yaml"
+    p.write_text(tmpl)
+    return p
+
+
+def sample(params, cfg):
+    """Render prompts from a trained LoRA via ai-toolkit (inference, no retrain).
+
+    Runs a throwaway ai-toolkit run that loads the trained LoRA (pretrained_lora_path)
+    and renders the prompts as its baseline samples — using the training SampleProcess,
+    which renders klein correctly (the standalone GenerateJob NaNs on klein). The
+    trained LoRA and its run output are never modified; the throwaway is cleaned up.
+    """
+    cfg = _resolved(cfg)
+    name = _resolve_name(cfg, params["name"])
+    if not name:
+        return {"action": "train.sample", "sampled": False}
+    prompts = params["prompt"]
+    if not prompts:
+        print(fail("Give at least one prompt, e.g. ")
+              + cyan(f'spark train sample "<trigger> a busy scene" --name {name}'))
+        sys.exit(1)
+    if _session_running(cfg):
+        print(warn(f"A training session is running — wait for it or {cyan('spark train pause')} first."))
+        return {"action": "train.sample", "name": name, "sampled": False}
+
+    lora = _latest_lora(cfg, name)
+    if not lora:
+        print(fail(f"No trained LoRA for '{name}' yet (no checkpoint).")); sys.exit(1)
+    state, _ = docker_probe(cfg)
+    if state != "ok":
+        print(fail("Cannot sample — Docker is not usable on the DGX:"))
+        print_docker_remedy(cfg, state); sys.exit(1)
+
+    _deploy_assets(cfg)
+    _ensure_image(cfg)
+    v = _run_values(cfg, name)
+    p = _paths(cfg, name)
+    seed = params["seed"] if params["seed"] is not None else 42
+    sample_run = f"{name}_sample"
+    sample_dir = f"{p['root']}/output/{sample_run}"
+    samples = f"{sample_dir}/samples"
+    ssh(cfg, f"rm -rf {shlex.quote(sample_dir)}")   # fresh throwaway
+
+    cfg_local = _render_sample_config(cfg, name, prompts, v, lora,
+                                      params["width"], params["height"], params["steps"], seed)
+    remote_cfg = f"{p['root']}/configs/{sample_run}.yaml"
+    if not _scp(cfg, cfg_local, remote_cfg):
+        print(fail("Could not upload the sample config.")); sys.exit(1)
+
+    print(bold(f"Sampling '{name}'") + dim(f"  ({len(prompts)} prompt(s), {v['arch']}, lora {Path(lora).name})"))
+    print(dim("  Loading the base + LoRA (first run pulls the base into VRAM, a few min)…"))
+    run = (f"cd {shlex.quote(p['root'])} && {_docker_env(cfg)}"
+           f"docker compose run --rm -T trainer /opt/ai-toolkit/run.py /workspace/configs/{sample_run}.yaml")
+    rc = subprocess.run(["ssh", f"{cfg['dgx_user']}@{cfg['dgx_host']}", run]).returncode
+
+    out_dir = Path(params["out"] or f"./{name}-samples").expanduser()
+    out_dir.mkdir(parents=True, exist_ok=True)
+    got = subprocess.run(["scp", "-q", f"{cfg['dgx_user']}@{cfg['dgx_host']}:{samples}/*.jpg",
+                          str(out_dir)]).returncode
+    ssh(cfg, f"rm -rf {shlex.quote(sample_dir)}")   # clean up the throwaway run
+    imgs = sorted(out_dir.glob("*.jpg"))
+    if rc != 0 and not imgs:
+        print(fail("Sampling failed — see the output above.")); sys.exit(1)
+    if got != 0 or not imgs:
+        print(warn("Ran, but couldn't fetch any images."))
+        return {"action": "train.sample", "name": name, "sampled": False, "lora": lora}
+    print(ok(f"{len(imgs)} image(s) → {cyan(str(out_dir))}"))
+    return {"action": "train.sample", "name": name, "sampled": True, "lora": lora,
+            "base": v["base"], "arch": v["arch"], "out": str(out_dir), "count": len(imgs)}
 
 
 # ── Auto-caption (Phase 3) ────────────────────────────────────────────────────────
@@ -499,4 +616,5 @@ HANDLERS = {
     "train.pause":  pause,
     "train.resume": resume,
     "train.status": status,
+    "train.sample": sample,
 }

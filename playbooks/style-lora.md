@@ -113,10 +113,17 @@ Repeat resume across as many time-boxed sessions as it takes; the run is **compl
 
 ## use
 
-Generate with the trigger word in the prompt:
+Two ways, depending on the base. Put the **trigger word** in the prompt either way.
 
-    spark comfy generate "<trigger> a lighthouse on a cliff" --lora <name>.safetensors
+- **Any base (incl. the default klein) — `spark train sample`:** renders prompts from
+  the trained LoRA via ai-toolkit (loads base + LoRA, pure inference), downloads images:
 
-**Caveat:** `comfy generate` currently serves **FLUX.2-dev (fp8)**, so a **dev**-trained
-inference, which isn't wired into `comfy generate` yet — for now, judge a klein run by
-its ai-toolkit **sample images** (`{train_dir}/output/<name>/samples/`).
+      spark train sample "<trigger> a busy harbor at dawn, boats, gulls" --name <name>
+
+- **dev-trained LoRA — `spark comfy generate --lora`:** loads it straight into ComfyUI:
+
+      spark comfy generate "<trigger> a lighthouse on a cliff" --lora <name>.safetensors
+
+`comfy generate` currently serves **FLUX.2-dev (fp8)** only, so a **klein** LoRA (the
+default) goes through `spark train sample` for now (wiring klein into `comfy generate`
+is a tracked follow-up).

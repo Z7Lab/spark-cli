@@ -1,0 +1,63 @@
+# ai-toolkit SAMPLE template for `spark train sample` — render prompts from a trained
+# LoRA without retraining or mutating it.
+#
+# Mechanism: a throwaway run (name <name>_sample, its OWN output folder) that loads the
+# trained LoRA as the network's starting weights (network.pretrained_lora_path), then
+# generates the "baseline samples before training" with your prompts — which reflect the
+# trained LoRA. steps=1 + save disabled, so nothing of value is trained or written back;
+# the original run's output is untouched. We use the training SampleProcess on purpose:
+# it renders klein correctly (ai-toolkit's standalone GenerateJob produces NaN for klein).
+#
+# `spark train sample` substitutes the @@...@@ tokens (most read from the run's own config).
+---
+job: extension
+config:
+  name: "@@NAME@@_sample"
+  process:
+    - type: "sd_trainer"
+      training_folder: "/workspace/output"
+      device: cuda:0
+      trigger_word: "@@TRIGGER@@"
+      network:
+        type: "lora"
+        linear: @@RANK@@
+        linear_alpha: @@RANK@@
+        pretrained_lora_path: "@@LORA_PATH@@"     # load the trained LoRA as init
+      save:
+        dtype: float16
+        save_every: 1000000                       # never save (throwaway run)
+        max_step_saves_to_keep: 0
+      datasets:
+        - folder_path: "@@DATASET@@"
+          caption_ext: "txt"
+          cache_latents_to_disk: true
+          resolution: [@@RESOLUTION@@]
+      train:
+        batch_size: 1
+        steps: 1                                  # minimal — we only want the baseline samples
+        gradient_checkpointing: true
+        noise_scheduler: "flowmatch"
+        optimizer: "adamw8bit"
+        lr: 1e-4
+        dtype: bf16
+      model:
+        name_or_path: "@@BASE_MODEL@@"
+        arch: "@@ARCH@@"
+        quantize: @@QUANTIZE@@
+      sample:
+        sampler: "flowmatch"
+        # > steps, so ONLY the unconditional "baseline samples before training" fire —
+        # those render the loaded LoRA exactly (one image per prompt, no extra pass).
+        sample_every: 1000000
+        width: @@WIDTH@@
+        height: @@HEIGHT@@
+        prompts:
+@@PROMPTS@@
+        neg: ""
+        seed: @@SEED@@
+        walk_seed: true
+        guidance_scale: 4
+        sample_steps: @@STEPS@@
+meta:
+  name: "@@NAME@@_sample"
+  version: "1.0"

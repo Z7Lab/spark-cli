@@ -57,6 +57,24 @@ class TestTrainHelpers(unittest.TestCase):
         self.assertIn("quantize: false", txt)   # 4B trains unquantized
         self.assertIn("steps: 2000", txt)
 
+    def test_render_sample_config(self):
+        import re
+        v = {"base": "black-forest-labs/FLUX.2-klein-base-4B", "arch": "flux2_klein_4b",
+             "rank": "32", "trigger": "mystylexr", "dataset": "/workspace/datasets/mystyle",
+             "resolution": "1024", "quantize": "false"}
+        p = train._render_sample_config(
+            self.cfg, "mystyle", ['trg a busy "neon" market', 'trg a dragon'], v,
+            "/srv/out/mystyle/mystyle.safetensors", 1024, 1024, 20, 42)
+        txt = p.read_text()
+        self.assertNotRegex(txt, r"@@\w+@@")
+        self.assertIn("job: extension", txt)                       # sample via training SampleProcess
+        self.assertIn('pretrained_lora_path: "/srv/out/mystyle/mystyle.safetensors"', txt)
+        self.assertIn("linear: 32", txt)                           # rank from the run config
+        self.assertIn('arch: "flux2_klein_4b"', txt)
+        self.assertIn("steps: 1", txt)                             # throwaway, no real training
+        self.assertIn('- "trg a busy \\"neon\\" market"', txt)     # quotes escaped
+        self.assertIn('- "trg a dragon"', txt)
+
     def test_loras_dir(self):
         self.assertEqual(train._loras_dir(self.cfg), "/srv/comfyui/workspace/models/loras")
 
