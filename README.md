@@ -46,10 +46,15 @@ spark llm reports [--out F]                        Render saved bench+probe resu
 
 # Image / video generation
 spark comfy <start|stop|status|logs|queue>        Manage AEON-Spark ComfyUI (port 8188)
-spark comfy generate "<prompt>"                   FLUX.2 text-to-image, downloads the PNG
+spark comfy generate "<prompt>" [--lora N] [--turbo]  FLUX.2 text-to-image (+ trained LoRA; --turbo = few-step)
 spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
 spark comfy qr-art <url> [--style --mode]         Scannable QR-code art (ControlNet)
 spark comfy pull-models [--set generate|animate|qr-art|all]  Download the models those commands need
+
+# Style-LoRA training (FLUX.2, on the dedicated DGX)
+spark train start <corpus> --trigger <word>       Train a FLUX.2 style LoRA from a corpus of images
+            [--max-hours N --steps N --auto-caption]    time-boxed, resumable; publishes to comfy loras
+spark train <status|pause|resume> [name]          Watch progress / stop after a checkpoint / continue
 
 # Audio transcription
 spark transcribe <start|stop|status|logs>         Manage whisper-server (port 8081)
@@ -190,6 +195,7 @@ API and the output downloads to your workstation:
 spark comfy start                                    # start (docker compose) — status/stop/logs/queue too
 spark comfy pull-models [--set generate|animate]     # fetch the FLUX.2 / LTX-2.3 models (once)
 spark comfy generate "a red fox in a snowy forest"   # FLUX.2 text-to-image → PNG
+spark comfy generate "a red fox" --turbo             # few-step distilled → seconds
 spark comfy animate fox.png "the fox leaps and runs" # LTX-2.3 image-to-video → MP4
 ```
 
@@ -212,6 +218,43 @@ spark command (the `tools/flatten_comfy_workflow.py` flatten → template → CL
 > dedicated `svc-spark` account, rootless Docker + CDI so a container escape isn't
 > host root, image digest-pinning, and the `/opt/spark` layout — see
 > [docs/secure-deployment.md](docs/secure-deployment.md).
+
+## Style-LoRA training (FLUX.2)
+
+Generate "in the style of" a corpus by training a FLUX.2 **style LoRA** on the DGX.
+Training runs ai-toolkit (ostris) in a **dedicated** container, driven through a
+detached `screen` session over SSH. As with the ComfyUI image, spark **drives an
+operator-provided, digest-pinned** ai-toolkit image (`spark config set aitoolkit_image
+…`) rather than building one — keeping ai-toolkit's brittle GPU dep tree out of this
+repo. spark deploys only the orchestration ([templates/train/](templates/train/):
+compose + watchdog) and pulls the image on first run.
+
+```bash
+# Point at a folder of style-consistent images you're cleared to use (~20–60 @ ~1024).
+# Caption each image's CONTENT in a sidecar <image>.txt; the trigger word carries the style.
+spark train start ~/corpora/my-style --trigger mystyle --max-hours 3
+spark train status                                   # progress, ETA, live session
+spark train pause                                    # stop cleanly after the next checkpoint
+spark train resume                                   # continue from there, another time-boxed chunk
+```
+
+A run is **time-boxed and resumable**: `--max-hours` auto-stops just after the next
+checkpoint, and the box does *only* training while a session is live. The corpus and
+its rights are **yours** — spark provides the framework, not the content.
+`--auto-caption` fills in missing captions from a served vision model
+(`spark llm serve <vlm>`).
+
+**Base model & licensing (read this).** The default base is **FLUX.2-klein-4B —
+own works and **sell** the results. ai-toolkit fetches it (and its Qwen3-4B text
+encoder) automatically. **FLUX.2-dev is an opt-in** (`spark config set train_base_model
+`HF_TOKEN` on the box (the gated path). Pick the base that matches your use.
+
+Set a GB10/sm_121-compatible ai-toolkit image with `spark config set aitoolkit_image
+<image@sha256:…>`; spark pulls it on first run (build-your-own reference:
+[templates/train/Dockerfile.reference](templates/train/Dockerfile.reference)).
+
+📖 **[docs/training.md](docs/training.md)** — corpus prep, captioning, the
+resume-in-chunks workflow, tuning (`--steps`/`--rank`), and troubleshooting.
 
 ## Audio transcription (Whisper)
 
@@ -265,6 +308,13 @@ spark queue \
 # Watch progress
 spark logs-dl
 ```
+
+**Public vs gated.** Public repos (everything in spark's catalogs) need **no token** —
+that's the default path above. For a **gated or private** repo, place a HuggingFace
+token **on the DGX** (where the downloader runs): `export HF_TOKEN=…` in its
+environment, or `hf auth login` (writes `~/.cache/huggingface/token`), after
+requesting access on HuggingFace. The downloader picks it up automatically — there's
+no `--token` flag, so secrets stay out of argv and the logs.
 
 For the concrete model names required by each `spark comfy` workflow (FLUX.2, LTX-2.3
 i2v, etc.) and their HuggingFace sources, see the **Models** table in
