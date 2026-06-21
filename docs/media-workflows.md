@@ -32,6 +32,21 @@ Options: `--base --lora --turbo --width --height --steps --guidance --seed --out
 - **`--turbo`** — few-step distilled LoRA for near-real-time gen (8 steps / 1.5
   guidance); fetch it with `spark comfy pull-models --set generate`.
 
+### Refine an image with a stronger model — `spark comfy refine`
+
+```bash
+spark comfy refine shop.png 'a bookshop, a sign reading "OPEN BOOKS"'   # img2img @ denoise 0.5, dev base
+spark comfy refine shop.png "..." --denoise 0.4   # keep more of the original
+```
+Full-image img2img that re-runs an image through a **stronger model** (default
+**FLUX.2-dev**) at a moderate `--denoise` (default **0.5**) to fix what a smaller base
+got wrong — chiefly **garbled text** and soft detail — while keeping composition and
+most style. The natural pairing: generate style on the **klein** base, then `refine` the
+keepers. Pass the original prompt (sign/label text in quotes) for the best text fix. The
+default refiner is FLUX.2-dev
+([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)). Targeted single-object
+edits are a separate, purpose-built edit model (tracked), not `refine`.
+
 ## 2. Animate a still (LTX-2.3 image-to-video)
 
 ```bash

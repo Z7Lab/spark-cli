@@ -56,9 +56,14 @@
 
 ## choose-base
 
-The base model decides both quality **and licensing**, so choose deliberately:
+The base model decides quality and is under its own license — review the linked
+license for your use:
 
-  your own works and **sell** the results. ai-toolkit fetches it automatically. Nothing to set.
+- **Default — `FLUX.2-klein-4B`**
+  ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated,
+  no token). ai-toolkit fetches it automatically. Nothing to set.
+- **`FLUX.2-dev`** ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) —
+  higher ceiling, gated. Opt in with
   `spark config set train_base_model black-forest-labs/FLUX.2-dev` +
   `spark config set train_arch flux2`, and an `HF_TOKEN` on the box.
 
@@ -127,3 +132,16 @@ Put the **trigger word** in the prompt. Match the base to the LoRA's training ba
   the run's base + LoRA, pure inference) straight from a run, no base switch needed:
 
       spark train sample "<trigger> a busy harbor at dawn, boats, gulls" --name <name>
+
+### fix text / sharpen detail
+
+klein nails the style but is weak on **text and fine detail**. Refine the keepers
+through a stronger model (FLUX.2-dev) — full-image img2img at denoise 0.5, keeping the
+look but repairing text. Pass the original prompt (sign/label text in quotes):
+
+    spark comfy refine harbor.png "<trigger> a busy harbor at dawn, a sign reading \"DOCK 4\""
+
+Lower `--denoise` keeps more of the original; higher fixes more but drifts toward dev.
+The default refiner is FLUX.2-dev
+([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)). Targeted single-object
+edits are a separate, purpose-built edit model (tracked), not `refine`.

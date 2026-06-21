@@ -656,6 +656,37 @@ def qr_art(params, cfg):
             "mode": mode, "seed": seed, "scanned": scanned}
 
 
+def refine(params, cfg):
+    """Refine an image with a stronger model — img2img at a moderate denoise so the
+    refiner fixes text and sharpens detail while keeping composition and most style.
+
+    A thin wrapper over `generate --init`: full-image img2img (no region/inpaint),
+    defaulting to FLUX.2-dev (the stronger text renderer) at denoise 0.5 — the level
+    that makes text legible without drifting far from the source. Targeted region edits
+    ("replace this object") are a separate, purpose-built edit verb, not this."""
+    img = params["image"]
+    denoise = params.get("denoise")
+    if denoise is None:
+        denoise = 0.5
+    g = {
+        "prompt": params.get("prompt") or "",
+        "width": params["width"], "height": params["height"],
+        "steps": params["steps"], "guidance": params["guidance"],
+        "seed": params["seed"], "out": params["out"],
+        "base": params.get("base") or "flux2-dev",
+        "model": None, "encoder": None, "vae": None,
+        "init": img, "denoise": denoise,
+        "inpaint": False, "region": None,
+        "lora": params.get("lora"), "lora_strength": params.get("lora_strength"),
+        "turbo": False,
+    }
+    r = generate(g, cfg)
+    r["action"] = "comfy.refine"
+    r["refined_from"] = img
+    r["denoise"] = denoise
+    return r
+
+
 HANDLERS = {
     "comfy.start":       start,
     "comfy.stop":        stop,
@@ -663,6 +694,7 @@ HANDLERS = {
     "comfy.queue":       queue,
     "comfy.logs":        logs,
     "comfy.generate":    generate,
+    "comfy.refine":      refine,
     "comfy.animate":     animate,
     "comfy.pull_models": pull_models,
     "comfy.qr_art":      qr_art,
