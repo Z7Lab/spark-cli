@@ -15,11 +15,21 @@ at `http://<dgx-host>:8188` and downloads results to your workstation.
 ```bash
 spark comfy generate "a red fox in a snowy forest at dawn"
 spark comfy generate "neon city street" --width 1280 --height 720 --steps 25 --out city.png
+spark comfy generate "a red fox in a snowy forest" --turbo            # few-step, ~seconds
+spark comfy generate "mystyle a lighthouse" --lora mystyle.safetensors # trained style LoRA
 ```
-Flat 11-node FLUX.2 graph built inline in the comfy handler
-(`lib/handlers/comfy.py`). First run loads the models into the GB10's unified
-memory (a few min); then ~30–60 s each.
+Flat FLUX.2 graph built inline in the comfy handler (`lib/handlers/comfy.py`).
+First run loads the models into the GB10's unified memory (a few min); then
+~30–60 s each (seconds with `--turbo`).
 Options: `--width --height --steps --guidance --seed --out --model --encoder --vae`.
+
+- **`--init <img>` / `--denoise`** — image-to-image (edit an existing image, keeping
+  its composition). **`--inpaint --region x,y,w,h`** — repaint only a region.
+- **`--lora <name> [--lora-strength]`** — load a FLUX.2 LoRA from `models/loras/`
+  (e.g. from `spark train`); put its trigger word in the prompt. LoRAs chain, so it
+  stacks with `--turbo`.
+- **`--turbo`** — few-step distilled LoRA for near-real-time gen (8 steps / 1.5
+  guidance); fetch it with `spark comfy pull-models --set generate`.
 
 ## 2. Animate a still (LTX-2.3 image-to-video)
 
@@ -179,6 +189,7 @@ no token required.
 | `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `diffusion_models/flux2_dev_fp8mixed.safetensors` |
 | `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `vae/flux2-vae.safetensors` |
 | `generate` (FLUX.2) | `Comfy-Org/flux2-dev` | `text_encoders/mistral_3_small_flux2_bf16.safetensors` |
+| `generate` (`--turbo`) | `Comfy-Org/flux2-dev` | `loras/Flux2TurboComfyv2.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3-fp8` | `checkpoints/ltx-2.3-22b-dev-fp8.safetensors` |
 | `animate` (LTX-2.3) | `Comfy-Org/ltx-2` | `text_encoders/gemma_3_12B_it_fp4_mixed.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `loras/ltx-2.3-22b-distilled-lora-384.safetensors` |

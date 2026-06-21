@@ -14,6 +14,11 @@ from sparkcore import (
     _models_catalog, _run_pull,
 )
 
+# Few-step distilled FLUX.2 LoRA used by `generate --turbo` (the "step distillation"
+# speed lever). Public, in Comfy-Org/flux2-dev → fetched by `comfy pull-models
+# --set generate`. Lives in ComfyUI's models/loras/ like any other LoRA.
+_TURBO_LORA = "Flux2TurboComfyv2.safetensors"
+
 def start(params, cfg):
     """Start AEON-Spark ComfyUI via docker compose (port 8188)."""
     compose_dir = cfg["comfy_dir"]
@@ -151,8 +156,6 @@ def generate(params, cfg):
     prompt   = params["prompt"]
     width    = params["width"]
     height   = params["height"]
-    steps    = params["steps"]
-    guidance = params["guidance"]
     seed     = params["seed"] if params["seed"] is not None else random.randint(1, 2**31 - 1)
     out      = params["out"]
     model    = params["model"]
@@ -160,6 +163,16 @@ def generate(params, cfg):
     vae      = params["vae"]
     init     = params.get("init")
     inpaint  = params.get("inpaint")
+    lora     = params.get("lora")
+    lora_strength = params.get("lora_strength")
+    if lora_strength is None:
+        lora_strength = 1.0
+    # --turbo applies a few-step distilled LoRA and drops the step/guidance defaults
+    # (the "distillation" speed lever — near-real-time gen). Explicit --steps/
+    # --guidance still win (they default to null so we can tell they were set).
+    turbo    = params.get("turbo")
+    steps    = params["steps"]    if params["steps"]    is not None else (8   if turbo else 20)
+    guidance = params["guidance"] if params["guidance"] is not None else (1.5 if turbo else 3.5)
     region_str = params.get("region") or "0.4,0.4,0.55,0.6"
     denoise  = params.get("denoise")
     # img2img keeps more of the init the lower the denoise (0.65 default). Inpaint
@@ -194,6 +207,23 @@ def generate(params, cfg):
         "11": {"class_type": "SaveImage", "inputs": {"images": ["10", 0], "filename_prefix": "spark_gen"}},
     }
 
+    # LoRAs load as a chain of LoraLoaderModelOnly between the UNET loader and
+    # ModelSamplingFlux — FLUX.2 LoRAs are model-only (no CLIP side), so the text
+    # encoder is untouched. --turbo's few-step LoRA goes first, then a style/subject
+    # LoRA (e.g. from `spark train`, whose trigger word goes in the prompt).
+    loras = []
+    if turbo:
+        loras.append((_TURBO_LORA, 1.0))
+    if lora:
+        loras.append((lora, lora_strength))
+    prev = ["1", 0]
+    for i, (lname, lstr) in enumerate(loras):
+        nid = str(19 + i)
+        graph[nid] = {"class_type": "LoraLoaderModelOnly",
+                      "inputs": {"model": prev, "lora_name": lname, "strength_model": lstr}}
+        prev = [nid, 0]
+    graph["2"]["inputs"]["model"] = prev
+
     def _get(path):
         return json.load(urllib.request.urlopen(base + path, timeout=60))
 
@@ -217,6 +247,28 @@ def generate(params, cfg):
     else:
         print(fail(f"ComfyUI at {base} didn't become ready (10 min).  "
                    f"Check: {cyan('spark comfy status')} / {cyan('spark comfy logs')}")); sys.exit(1)
+
+    # Validate each LoRA name against ComfyUI's own node catalog (HTTP-only, keeps
+    # generate SSH-free) so a typo or a not-yet-installed LoRA fails fast with the
+    # available names — instead of a cryptic mid-graph ComfyUI rejection.
+    if loras:
+        try:
+            info = _get("/object_info/LoraLoaderModelOnly")
+            avail = info["LoraLoaderModelOnly"]["input"]["required"]["lora_name"][0]
+        except Exception:
+            avail = []
+        for lname, lstr in loras:
+            if avail and lname not in avail:
+                print(fail(f"LoRA '{lname}' is not in ComfyUI's models/loras/."))
+                print(f"  Available: {cyan(', '.join(avail)) if avail else dim('(none)')}")
+                if lname == _TURBO_LORA:
+                    print(dim(f"  Get it with {cyan('spark comfy pull-models --set generate')}."))
+                else:
+                    print(dim(f"  Train one with {cyan('spark train start')}, or drop a .safetensors into "
+                              f"{cfg['comfy_dir']}/workspace/models/loras/."))
+                sys.exit(1)
+            tag = "turbo" if lname == _TURBO_LORA else "lora"
+            print(f"  {tag:<7}{cyan(lname)}  {dim(f'(strength {lstr})')}")
 
     # img2img: upload the init still, encode it to a latent, and sample from that
     # at --denoise (keeps the source composition; the prompt edits it). Without
@@ -328,7 +380,8 @@ def generate(params, cfg):
     print(ok(f"Image saved: {cyan(out)}  {dim(f'({len(data)//1024} KB, {int(time.time() - t0)}s)')}"))
     print(f"  On DGX: {dim(cfg['comfy_dir'] + '/workspace/output/' + img['filename'])}")
     return {"action": "comfy.generate", "out": out, "seed": seed,
-            "width": width, "height": height, "steps": steps,
+            "width": width, "height": height, "steps": steps, "turbo": bool(turbo),
+            "lora": lora, "lora_strength": lora_strength if lora else None,
             "bytes": len(data), "filename": img["filename"]}
 
 
