@@ -24,3 +24,7 @@ Example:
       <org>/<model-2>-GGUF <name-2> "<glob-2>"
 
 Monitor with `spark logs-dl`.
+
+Auth works exactly as in `spark download`: public repos need no token; gated/private
+repos use a HuggingFace token placed **on the DGX** (`HF_TOKEN` or `hf auth login`),
+auto-detected by the downloader. See `spark download --help` for the details.
