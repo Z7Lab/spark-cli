@@ -431,6 +431,15 @@ def status(params, cfg):
     if st.get("stop_reason"):
         print(f"    last stop  {dim(st['stop_reason'])}")
 
+    # A live run still at step 0 is in the base-model phase (first run fetches +
+    # loads/quantizes the base — minutes to tens of minutes for a big gated base
+    # like FLUX.2-dev). Surface it with the HF-cache size as a download proxy, so
+    # "0/N" doesn't read as stuck (no need to SSH and `du` the cache by hand).
+    if running and cur == 0 and status_str not in ("complete", "error"):
+        cache = ssh(cfg, f"du -sh {shlex.quote(cfg['train_dir'])}/cache/huggingface 2>/dev/null | cut -f1").strip()
+        hint = "downloading / loading base model" + (f" — HF cache {cache}" if cache else "")
+        print(f"    preparing  {dim(hint)}")
+
     published = None
     if status_str == "complete":
         published = _publish(cfg, name)
