@@ -114,13 +114,14 @@ def status(params, cfg):
     else:
         # No comfy container: tell apart a healthy idle daemon from a daemon
         # that is down/denied — the latter must not read as 'not running' (bug A2).
-        state, _ = docker_probe(cfg)
-        if state == "ok":
+        # NB: bind to a NEW name — `state` is the result dict returned below.
+        dstate, _ = docker_probe(cfg)
+        if dstate == "ok":
             print(f"  ComfyUI  {dim('not running')}  Run: {cyan('spark comfy start')}")
-        elif state == "permission":
+        elif dstate == "permission":
             print(f"  ComfyUI  {warn('Docker permission denied')}  "
                   f"Fix: {cyan('sudo usermod -aG docker ' + cfg['dgx_user'])} {dim('(see: spark comfy status)')}")
-        elif state == "absent":
+        elif dstate == "absent":
             print(f"  ComfyUI  {warn('Docker not installed')}")
         else:
             print(f"  ComfyUI  {warn('Docker daemon down')}  "
@@ -159,6 +160,18 @@ def status(params, cfg):
     state["disk"] = disk or None
     if disk:
         print(f"  Disk     {disk}")
+
+    # HF token PRESENCE (never the value) — what authenticates gated base downloads
+    # (klein-9B / FLUX.2-dev). Reports only present/absent for spark's own env and
+    # for the DGX (env var or ~/.cache/huggingface/token, which the downloader uses).
+    import os as _os
+    local_tok = bool((_os.environ.get("HF_TOKEN") or _os.environ.get("HUGGING_FACE_HUB_TOKEN") or "").strip())
+    dgx_tok = ssh(cfg, '[ -n "$HF_TOKEN" ] || [ -s ~/.cache/huggingface/token ] '
+                       '&& echo present || echo absent').strip() == "present"
+    state["hf_token"] = {"local": local_tok, "dgx": dgx_tok}
+    def _badge(p): return ok("present") if p else dim("absent")
+    print(f"  HF token {_badge(dgx_tok)} on DGX  ·  {_badge(local_tok)} in spark env  "
+          + dim("(gated bases need one)"))
 
     # GPU temperature / throttle (one line; full detail in `spark temp`)
     g = _gpu_query(cfg)

@@ -27,7 +27,7 @@ from pathlib import Path
 from sparkcore import (
     REPO_ROOT, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, ssh_screen, _docker_env, docker_probe, print_docker_remedy,
-    _free_bytes, _comfy_mem_bytes, _llm_instances, _human,
+    _free_bytes, _comfy_mem_bytes, _llm_instances, _human, remote_script,
 )
 
 TRAIN_SESSION = "spark-train"          # one dedicated session: the box trains, nothing else
@@ -153,10 +153,20 @@ def _deploy_assets(cfg: dict) -> None:
     ssh(cfg, f"chmod +x {shlex.quote(root)}/bin/spark_train.py")
     # compose reads {train_dir}/.env: the operator's ai-toolkit image, and an HF
     # token ONLY if one is in spark's environment (needed only for a gated base like
-    # the FLUX.2-dev opt-in; the default klein-4B base is ungated). ai-toolkit fetches
+    # the klein-9B opt-in; the default klein-4B base is ungated). ai-toolkit fetches
     # the base into the mounted HF cache itself.
     import os
     env = f"AITOOLKIT_IMAGE={cfg['aitoolkit_image']}\n"
+    # Force huggingface_hub's stable single-stream downloader (retry + resume) for the
+    # in-container base fetch. hf_transfer's many-parallel-connection strategy is fast on
+    # a clean link but stalls on flaky networks (dropped connections mid-shard) — a
+    # multi-GB base download that hangs blocks the whole run. Stability > peak speed here.
+    env += "HF_HUB_ENABLE_HF_TRANSFER=0\n"
+    # SPARK_TRAIN_OFFLINE=1 forces huggingface_hub to load the base from the local cache
+    # only (no network) — for when the base is already present in {train_dir}/cache and
+    # the box's link to HF is too flaky to (re)download a large gated base reliably.
+    if os.environ.get("SPARK_TRAIN_OFFLINE"):
+        env += "HF_HUB_OFFLINE=1\n"
     if os.environ.get("HF_TOKEN"):
         env += f"HF_TOKEN={os.environ['HF_TOKEN']}\n"
     ssh(cfg, f"printf %s {shlex.quote(env)} > {shlex.quote(root)}/.env")
@@ -194,7 +204,7 @@ def _render_config(cfg: dict, name: str, trigger: str, steps: int,
                    save_every: int, rank: int, resolution: int) -> Path:
     tmpl = (_ASSETS / "aitoolkit_config.yaml").read_text()
     arch = cfg["train_arch"]
-    quantize = "false" if "klein" in arch else "true"   # 4B fits unquantized; quantize 32B dev
+    quantize = "false"   # klein bases (4B/9B) fine-tune unquantized on the Spark
     subs = {
         "@@NAME@@": name, "@@TRIGGER@@": trigger, "@@STEPS@@": str(steps),
         "@@SAVE_EVERY@@": str(save_every), "@@RANK@@": str(rank),
@@ -221,6 +231,149 @@ def _launch(cfg: dict, name: str, steps: int, max_seconds: int) -> None:
            f"--max-seconds {max_seconds} --target-steps {steps}")
     inner = (f"cd {root} && {_docker_env(cfg)}{run} 2>&1 | tee -a logs/{name}.log")
     ssh_screen(cfg, TRAIN_SESSION, inner)
+
+
+# ── Base prefetch (offline-cache seeding) ──────────────────────────────────────────
+
+# What ai-toolkit's flux2 loader resolves from the HF cache, per arch. The DiT
+# single-file name mirrors its flux2_te_filename / FLUX2_TRANSFORMER_FILENAME; the
+# text-encoder repo is HARDCODED in ai-toolkit and loaded via from_pretrained — it
+# has no name_or_path / local-path option, so it MUST be in the cache to run offline.
+_DIT_FILENAME = {
+    "flux2_klein_4b": "flux-2-klein-base-4b.safetensors",
+    "flux2_klein_9b": "flux-2-klein-base-9b.safetensors",
+}
+_TE_REPO = {
+    "flux2_klein_4b": "Qwen/Qwen3-4B",
+    "flux2_klein_9b": "Qwen/Qwen3-8B",
+}
+_VAE_REPO = "ai-toolkit/flux2_vae"
+_VAE_FILENAME = "ae.safetensors"
+
+
+def _base_components(cfg: dict) -> list[dict]:
+    """The HF repos ai-toolkit resolves for the configured base, as cache-seed jobs.
+
+    klein's three components (DiT, Qwen text encoder, VAE) all load through the HF
+    cache; seeding them lets a run train fully offline — the only reliable path when
+    the box's link to HF is too flaky to pull a multi-GB component mid-run. The
+    ungated, no-escape-hatch text encoder goes first; the (possibly gated) DiT last.
+    """
+    arch = cfg["train_arch"]
+    base = cfg["train_base_model"]
+    jobs: list[dict] = []
+    te = _TE_REPO.get(arch)
+    if te:
+        jobs.append({"repo": te, "glob": "*", "label": f"text encoder ({te})", "gated": False})
+    jobs.append({"repo": _VAE_REPO, "glob": _VAE_FILENAME, "label": "VAE", "gated": False})
+    # The transformer alone has a local-path bypass: if train_base_model is a local
+    # path (not an "org/repo" id), ai-toolkit loads the DiT from it directly — so
+    # skip caching it (reuses a file already on the box, e.g. an 18 GB klein-9B DiT).
+    base_is_local = base.startswith(("/", "~", "./", "../")) or base.endswith(".safetensors")
+    dit = _DIT_FILENAME.get(arch)
+    if dit and not base_is_local:
+        gated = arch != "flux2_klein_4b"   # klein-4B is Apache-2.0/ungated; klein-9B is gated
+        jobs.append({"repo": base, "glob": dit, "label": f"transformer ({arch})", "gated": gated})
+    return jobs
+
+
+def _ensure_resolvable(cfg: dict, cache: str, repo: str, filename: str) -> bool:
+    """True if <filename> resolves offline for <repo>, REPAIRING refs/main if needed.
+
+    Mirrors huggingface_hub's offline lookup (refs/main → commit → snapshots/<commit>/
+    <filename>) and fixes the two ways a hand-seeded cache breaks it:
+      • refs/main has a trailing newline — huggingface_hub reads the ref *without*
+        stripping, so snapshots/"<sha>\\n"/ misses. We rewrite it clean (printf, no
+        newline).
+      • refs/main is missing — we adopt an existing snapshot dir that holds the file.
+    Lets fetch-base skip an already-cached component (e.g. a gated 18 GB transformer)
+    AND guarantees a run can actually load it offline.
+    """
+    d = f"{cache}/hub/models--{repo.replace('/', '--')}"
+    dq, fq = shlex.quote(d), shlex.quote(filename)
+    # tr -d strips any whitespace/newline; printf rewrites with none.
+    cmd = (
+        f'd={dq}; fn={fq}; '
+        f'r=$(tr -d "[:space:]" < "$d/refs/main" 2>/dev/null); '
+        f'if [ -n "$r" ] && [ -f "$d/snapshots/$r/$fn" ]; then '
+        f'  printf %s "$r" > "$d/refs/main"; echo yes; '
+        f'else '
+        f'  s=$(ls -1 "$d/snapshots" 2>/dev/null | while read x; do '
+        f'        [ -f "$d/snapshots/$x/$fn" ] && echo "$x" && break; done); '
+        f'  if [ -n "$s" ]; then mkdir -p "$d/refs"; printf %s "$s" > "$d/refs/main"; echo yes; '
+        f'  else echo no; fi; '
+        f'fi'
+    )
+    return ssh(cfg, cmd).strip() == "yes"
+
+
+def fetch_base(params, cfg):
+    """Pre-seed the mounted HF cache so a run trains fully offline.
+
+    ai-toolkit fetches the base (DiT + Qwen text encoder + VAE) from HF on first
+    run, but a multi-GB component over a flaky link can stall and hang the whole
+    run — and klein's text encoder is loaded by a hardcoded repo id with no local
+    path option, so the only reliable fix is to have it in the cache already. This
+    seeds {train_dir}/cache/huggingface with the resume-safe downloader (8 retries,
+    HTTP-Range resume) in the canonical layout from_pretrained / hf_hub_download
+    resolve with HF_HUB_OFFLINE=1. Re-run to resume; then start with
+    SPARK_TRAIN_OFFLINE=1.
+    """
+    cfg = _resolved(cfg)
+    import os
+    jobs = _base_components(cfg)
+    base = cfg["train_base_model"]
+    if (base.startswith(("/", "~", "./", "../")) or base.endswith(".safetensors")) \
+            and _DIT_FILENAME.get(cfg["train_arch"]):
+        print(dim(f"  Transformer is a local path ({base}) — using ai-toolkit's local-path "
+                  f"bypass; seeding only the text encoder + VAE."))
+    cache = f"{cfg['train_dir'].rstrip('/')}/cache/huggingface"
+    ssh(cfg, f"mkdir -p {shlex.quote(cache)}")
+
+    # Deploy the downloader (a stale remote copy predates --hf-cache).
+    local_engine = REPO_ROOT / "bin" / "hf_download.py"
+    remote_dl = remote_script(cfg, "hf_download.py")
+    print(dim(f"Syncing downloader → {cfg['dgx_host']}:{remote_dl}"))
+    if not _scp(cfg, local_engine, remote_dl):
+        print(fail("Could not deploy the downloader to the DGX (scp failed).")); sys.exit(1)
+
+    tok = (os.environ.get("HF_TOKEN") or "").strip()
+    if any(j["gated"] for j in jobs) and not tok:
+        print(warn("A gated component is configured but no HF_TOKEN is set in spark's environment."))
+        print(dim("  Accept the base's license on HF, then re-run with HF_TOKEN=…  (the DGX's own "
+                  "~/.cache/huggingface/token is a fallback). Ungated components still seed."))
+    env_prefix = f"HF_TOKEN={shlex.quote(tok)} " if tok else ""
+
+    print(bold(f"Seeding HF cache for {cfg['train_arch']}") + dim(f"  → {cache}"))
+    results = []
+    for j in jobs:
+        print(f"\n  {cyan(j['label'])}  {dim(j['repo'])}")
+        # A concrete single-file component (transformer / VAE) already in the cache
+        # resolves offline as-is — skip it (don't re-pull a gated 18 GB DiT). The
+        # text encoder uses glob '*', so always run it (resume-safe, fills any gaps).
+        if "*" not in j["glob"] and _ensure_resolvable(cfg, cache, j["repo"], j["glob"]):
+            print(dim(f"  already cached ({j['glob']}) — skipping"))
+            results.append((j, True))
+            continue
+        cmd = (f"{env_prefix}python3 {remote_dl} {shlex.quote(j['repo'])} "
+               f"{shlex.quote(cache)} {shlex.quote(j['glob'])} --hf-cache")
+        rc = subprocess.run(["ssh", "-t", f"{cfg['dgx_user']}@{cfg['dgx_host']}", cmd]).returncode
+        results.append((j, rc == 0))
+        if rc != 0:
+            print(warn(f"  {j['label']} did not complete (re-run to resume)."))
+
+    okc = [j for j, good in results if good]
+    bad = [j for j, good in results if not good]
+    print()
+    if not bad:
+        print(ok(f"Base cached ({len(okc)}/{len(results)} components)."))
+        print(f"  Train offline: {cyan('SPARK_TRAIN_OFFLINE=1 spark train start <corpus> --trigger <word>')}")
+    else:
+        print(warn(f"{len(okc)}/{len(results)} components cached; missing: "
+                   + ", ".join(j['label'] for j in bad)))
+        print(dim("  Re-run (downloads are resume-safe). Gated components need HF_TOKEN=…"))
+    return {"action": "train.fetch_base", "cache": cache,
+            "cached": [j["repo"] for j in okc], "missing": [j["repo"] for j in bad]}
 
 
 # ── Verbs ────────────────────────────────────────────────────────────────────────
@@ -280,12 +433,14 @@ def start(params, cfg):
                   + cyan("--free") + dim(", or `spark comfy stop` / `spark llm stop`."))
 
     # ai-toolkit fetches the base model itself on first run (into the mounted HF
-    # cache). Warn if a gated base is configured without a token in the environment.
+    # cache). klein-9B is gated + multi-GB: warn (unless already going offline from a
+    # seeded cache) and point at the prefetch — a mid-run download stall hangs the run.
     import os
-    if "black-forest-labs/FLUX.2-dev" in cfg["train_base_model"] and not os.environ.get("HF_TOKEN"):
-        print(warn("Base is the gated FLUX.2-dev but no HF_TOKEN is set."))
-        print(dim("  Accept its license on HF, then re-run with HF_TOKEN=… (the default klein-4B "
-                  "base is ungated and needs no token).  See docs/training.md."))
+    if cfg["train_arch"] == "flux2_klein_9b" and not os.environ.get("SPARK_TRAIN_OFFLINE"):
+        print(warn("klein-9B is gated and pulls multi-GB components on first run."))
+        print(dim("  Reliable path on a flaky link: ") + cyan("spark train fetch-base")
+              + dim(" then ") + cyan("SPARK_TRAIN_OFFLINE=1 spark train start …")
+              + dim(" (offline). Online needs an HF_TOKEN; the default klein-4B needs neither."))
 
     missing = [f for f in imgs if not f.with_suffix(".txt").exists()]
     print(bold(f"Train LoRA '{name}'") + dim(f"  ({len(imgs)} images, trigger '{trigger}')"))
@@ -432,8 +587,8 @@ def status(params, cfg):
         print(f"    last stop  {dim(st['stop_reason'])}")
 
     # A live run still at step 0 is in the base-model phase (first run fetches +
-    # loads/quantizes the base — minutes to tens of minutes for a big gated base
-    # like FLUX.2-dev). Surface it with the HF-cache size as a download proxy, so
+    # loads the base — minutes to tens of minutes for a big gated base like
+    # klein-9B). Surface it with the HF-cache size as a download proxy, so
     # "0/N" doesn't read as stuck (no need to SSH and `du` the cache by hand).
     if running and cur == 0 and status_str not in ("complete", "error"):
         cache = ssh(cfg, f"du -sh {shlex.quote(cfg['train_dir'])}/cache/huggingface 2>/dev/null | cut -f1").strip()
@@ -504,7 +659,7 @@ def _run_values(cfg: dict, name: str) -> dict:
     v.setdefault("trigger", "style")
     v.setdefault("dataset", f"/workspace/datasets/{name}")
     v.setdefault("resolution", "1024")
-    v.setdefault("quantize", "false" if "klein" in v["arch"] else "true")
+    v.setdefault("quantize", "false")
     return v
 
 
@@ -630,9 +785,10 @@ def _auto_caption(cfg: dict, images: list[Path], trigger: str) -> None:
 
 
 HANDLERS = {
-    "train.start":  start,
-    "train.pause":  pause,
-    "train.resume": resume,
-    "train.status": status,
-    "train.sample": sample,
+    "train.start":      start,
+    "train.pause":      pause,
+    "train.resume":     resume,
+    "train.status":     status,
+    "train.sample":     sample,
+    "train.fetch_base": fetch_base,
 }

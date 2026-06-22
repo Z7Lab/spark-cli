@@ -24,7 +24,7 @@ spark init
 
 ```
 spark init                                        First-time setup — create ~/.config/spark.json
-spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM, GPU temp)
+spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM, GPU temp, HF-token presence)
 spark temp                                        GPU temperature, utilization, power, clocks + throttle reasons
 spark models                                      List downloaded models with quant and size
 spark disk [--prune]                              DGX disk usage by consumer; --prune reclaims Docker space
@@ -59,6 +59,7 @@ spark comfy pull-models [--set generate|generate-klein|edit|animate|qr-art|all] 
 # Style-LoRA training (FLUX.2, on the dedicated DGX)
 spark train start <corpus> --trigger <word>       Train a FLUX.2 style LoRA from a corpus of images
             [--max-hours N --steps N --auto-caption]    time-boxed, resumable; publishes to comfy loras
+spark train fetch-base                             Pre-seed the HF cache for offline training (large/gated base, flaky link)
 spark train <status|pause|resume> [name]          Watch progress / stop after a checkpoint / continue
 spark train sample "<prompt>" [--name N]          Render prompts from a trained LoRA (inference, no retrain)
 
@@ -253,10 +254,18 @@ its rights are **yours** — spark provides the framework, not the content.
 **Base model.** The default base is **FLUX.2-klein-4B**
 ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated, no
 token); ai-toolkit fetches it (and its Qwen3-4B text encoder) automatically.
-**FLUX.2-dev** ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) is an
-opt-in (`spark config set train_base_model black-forest-labs/FLUX.2-dev` + `train_arch
-flux2`): it's gated and needs an `HF_TOKEN` on the box. Review each model's license for
-your own use.
+**FLUX.2-klein-9B** (`train_arch flux2_klein_9b`,
+[license](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B)) is a gated
+opt-in with more capacity (`spark config set train_base_model …` + `train_arch …`, plus
+an `HF_TOKEN` on the box). FLUX.2-dev (32B) is **not** a training base — too large to
+fine-tune on a single Spark (it remains the `comfy generate`/`refine` model). Review
+each model's license for your own use.
+
+**Large/gated base on a flaky link.** These pull multi-GB components (klein-9B's text
+encoder is `Qwen/Qwen3-8B`), and a stall mid-run can hang training. Pre-seed the cache
+first with `spark train fetch-base`, then start with `SPARK_TRAIN_OFFLINE=1 spark train
+start …` so the base loads offline (no network). `spark status` shows whether an
+`HF_TOKEN` is present. See [docs/training.md](docs/training.md).
 
 Set a GB10/sm_121-compatible ai-toolkit image with `spark config set aitoolkit_image
 <image@sha256:…>`; spark pulls it on first run (build-your-own reference:
@@ -418,5 +427,14 @@ consolidated under a single service-account-owned `/opt/spark` tree) by editing
 e.g. `spark config set models_dir /opt/spark/models`. The bundled on-box scripts
 (`hf_download.py`, `tts_gen.py`) live under one `remote_bin` dir — set it once
 (`spark config set remote_bin /opt/spark/bin`) and each script's path derives from it.
+
+A few jobs are too involved for a one-line SSH command — resume-safe downloads
+(`hf_download.py`) and TTS synthesis (`tts_gen.py`). For these, spark ships a
+standalone helper in `bin/` and runs it on the DGX in two steps: **`scp`** the repo's
+copy up to `remote_bin`, then **`ssh … python3 <remote_bin>/<script>`**. The on-box
+path comes from `sparkcore.remote_script(cfg, name)`, so "remote" here always means
+*on the DGX* (reached over SSH), never the workstation `spark` runs on. (The training
+watchdog `spark_train.py` follows the same scp-then-run idea but is deployed under
+`train_dir/bin` alongside the run's other assets, not `remote_bin`.)
 
 Run `spark models` to list what's downloaded on your DGX, with quant and size.

@@ -40,8 +40,8 @@ _CONFIG = [
     {"key": "comfy_dir",    "default": "~/comfyui-aeon-spark",                   "env": "SPARK_COMFY_DIR",          "type": "str",  "init": False, "help": "ComfyUI install dir on the DGX"},
     {"key": "comfy_port",   "default": 8188,                                     "env": "SPARK_COMFY_PORT",         "type": "int",  "init": False, "help": "ComfyUI HTTP port"},
     {"key": "train_dir",    "default": "~/spark-train",                          "env": "SPARK_TRAIN_DIR",          "type": "str",  "init": False, "help": "Training stack dir on the DGX (datasets, configs, outputs, run state)"},
-    {"key": "train_base_model", "default": "black-forest-labs/FLUX.2-klein-base-4B", "env": "SPARK_TRAIN_BASE_MODEL", "type": "str",  "init": False, "help": "Training base (HF repo id or local path). Default klein-4B is Apache-2.0, ungated (no token). FLUX.2-dev is a gated opt-in, needs an HF token on the DGX"},
-    {"key": "train_arch",      "default": "flux2_klein_4b",                       "env": "SPARK_TRAIN_ARCH",         "type": "str",  "init": False, "help": "ai-toolkit model arch for the base: flux2_klein_4b | flux2_klein_9b | flux2 (dev)"},
+    {"key": "train_base_model", "default": "black-forest-labs/FLUX.2-klein-base-4B", "env": "SPARK_TRAIN_BASE_MODEL", "type": "str",  "init": False, "help": "Training base (HF repo id or local path). Default klein-4B is Apache-2.0, ungated (no token). klein-9B is a gated opt-in, needs an HF token on the DGX"},
+    {"key": "train_arch",      "default": "flux2_klein_4b",                       "env": "SPARK_TRAIN_ARCH",         "type": "str",  "init": False, "help": "ai-toolkit model arch for the base: flux2_klein_4b | flux2_klein_9b"},
     {"key": "aitoolkit_image", "default": "",                                    "env": "SPARK_AITOOLKIT_IMAGE",    "type": "str",  "init": False, "help": "Operator-provided ai-toolkit image for spark train — REQUIRED, unset by default (no usable upstream image for GB10/sm_121). Set it to an image you built/obtained: spark config set aitoolkit_image <image[@sha256:…]> (see templates/train/Dockerfile.reference). spark drives it, never builds it"},
     {"key": "tts_venv",     "default": "~/venvs/qwen-tts",                        "env": "SPARK_TTS_VENV",           "type": "str",  "init": False, "help": "Python venv running qwen-tts on the DGX"},
     {"key": "whisper_bin",  "default": "~/whisper.cpp/build/bin/whisper-server", "env": "SPARK_WHISPER_BIN",        "type": "str",  "init": False, "help": "whisper-server binary path"},
@@ -91,9 +91,15 @@ def load_config() -> dict:
 
 
 def remote_script(cfg, name):
-    """Where a bundled script (e.g. 'hf_download.py') lives on the DGX: derived
-    as `{remote_bin}/{name}` so the on-box basename always tracks the repo file
-    and a rename can't drift."""
+    """Where a bundled script (e.g. 'hf_download.py') lives ON THE DGX.
+
+    Some jobs (resume-safe downloads, tts synth) are too involved for a one-line
+    SSH command, so spark ships a standalone helper in bin/ and runs it on the box
+    in two steps: scp the repo's copy up, then `ssh … python3 <this path>`. This
+    returns that on-box path, derived as `{remote_bin}/{name}` — one config dir, so
+    the basename always tracks the repo file and a rename can't drift. "remote" =
+    the DGX (reached over SSH), not the workstation `spark` runs on. Callers:
+    core.download / core.queue / *.pull_models / train.fetch_base / tts.say."""
     return f"{cfg['remote_bin'].rstrip('/')}/{name}"
 
 # ── Colors ────────────────────────────────────────────────────────────────────

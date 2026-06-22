@@ -33,9 +33,12 @@ shared unified memory (training then contends for it); pass `--free` to stop the
 first and give training the whole box (opt-in — never automatic).
 
 The base model defaults to **FLUX.2-klein-4B** (Apache-2.0, ungated, no token).
-FLUX.2-dev is a gated opt-in (`spark config set train_base_model …` + `train_arch
-flux2`, plus an `HF_TOKEN`). ai-toolkit downloads the base on first run. See
-docs/training.md for the base table + license links.
+**klein-9B** (`train_arch flux2_klein_9b`) is a gated opt-in with more capacity
+(`spark config set train_base_model …` + `train_arch …`, plus an `HF_TOKEN`).
+ai-toolkit downloads the base on first run; for klein-9B on a flaky link, pre-seed it
+with `spark train fetch-base` and start with `SPARK_TRAIN_OFFLINE=1` so it loads offline
+(no mid-run stalls). FLUX.2-dev (32B) is not a training base — too large to fine-tune on
+a single Spark. See docs/training.md for the base table + license links.
 
 The session is **time-boxed and resumable**: `--max-hours` auto-stops the run
 cleanly just after the next checkpoint once the budget elapses, and

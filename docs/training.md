@@ -6,9 +6,9 @@ and the inference wiring; the corpus and its rights are **yours**.
 
 > **Base model.** The default is **FLUX.2-klein-4B**
 > ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated,
-> no token). **FLUX.2-dev**
-> ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) is a gated opt-in and
-> needs an `HF_TOKEN`. Review each model's license for your own use. See
+> no token). **FLUX.2-klein-9B**
+> ([license](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B)) is a gated
+> opt-in with more capacity. Review each model's license for your own use. See
 > [Base model](#base-model) below.
 
 Training runs [ai-toolkit (ostris)](https://github.com/ostris/ai-toolkit) in a
@@ -139,8 +139,6 @@ reaches `--steps`. On completion the latest checkpoint is published into ComfyUI
 ## 4. Generate with the LoRA
 
 ```bash
-# dev-trained LoRA (FLUX.2-dev is the default base):
-spark comfy generate "mystylexr a lighthouse on a cliff at dusk" --lora my-art-style.safetensors
 # klein-trained LoRA (the default training base) — switch comfy to the klein base:
 spark comfy pull-models --set generate-klein            # once
 spark comfy generate "mystylexr a busy harbor at dawn" --base flux2-klein-4b --lora my-art-style.safetensors
@@ -151,9 +149,10 @@ loader and `ModelSamplingFlux` (FLUX.2 style LoRAs are model-only). Put the **tr
 word** in the prompt; `--lora-strength` (default 1.0) scales the effect. The name is
 validated against ComfyUI's own LoRA list, so a typo fails fast with the choices.
 
-> **Match the base to the LoRA's training base.** A **dev** LoRA loads on the default
-> base; a **klein** LoRA needs `--base flux2-klein-4b` (after `comfy pull-models --set
-> generate-klein`). `--turbo` is FLUX.2-dev only.
+> **Match the base to the LoRA's training base.** spark trains klein LoRAs, so render
+> with `--base flux2-klein-4b` (after `comfy pull-models --set generate-klein`). A LoRA
+> trained elsewhere on FLUX.2-dev loads on comfy's default base. `--turbo` is
+> FLUX.2-dev only.
 
 You can also drop any FLUX.2 `.safetensors` LoRA into
 `{comfy_dir}/workspace/models/loras/` and use it the same way.
@@ -192,7 +191,12 @@ Review each model's license (linked) for your own use.
 |------|-----------------------------------|---------|--------|
 | **klein-4B** (default) | `black-forest-labs/FLUX.2-klein-base-4B` / `flux2_klein_4b` | [Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B) | no |
 | klein-9B | `black-forest-labs/FLUX.2-klein-base-9B` / `flux2_klein_9b` | [license](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B) (gated) | yes |
-| FLUX.2-dev (32B) | `black-forest-labs/FLUX.2-dev` / `flux2` | [license](https://huggingface.co/black-forest-labs/FLUX.2-dev) (gated) | yes |
+
+> **Not FLUX.2-dev.** dev (32B) is too large to fine-tune on a single 128 GB Spark —
+> ai-toolkit [#531](https://github.com/ostris/ai-toolkit/issues/531) shows a ~256 GB box
+> OOMing with every optimization on (closed *not planned*), and NVIDIA's own Spark image
+> fine-tuning targets the 12B FLUX.1-dev. Use klein (4B/9B); dev stays a generation /
+> [`refine`](../commands/comfy/refine.md) model only.
 
 Switch base:
 
@@ -200,15 +204,43 @@ Switch base:
 # default — ungated, no token, nothing to set
 spark train start ~/lora-training/my-art-style --trigger mystylexr
 
-# FLUX.2-dev (gated): accept its license on HF, then:
-spark config set train_base_model black-forest-labs/FLUX.2-dev
-spark config set train_arch flux2
-HF_TOKEN=hf_xxx spark train start ~/lora-training/my-art-style --trigger mystylexr
+# klein-9B (gated, more capacity): accept its license on HF, then seed + train offline:
+spark config set train_base_model black-forest-labs/FLUX.2-klein-base-9B
+spark config set train_arch flux2_klein_9b
+HF_TOKEN=hf_xxx spark train fetch-base
+SPARK_TRAIN_OFFLINE=1 spark train start ~/lora-training/my-art-style --trigger mystylexr
 ```
 
 For a gated base, `HF_TOKEN` (from spark's environment) is written into
 `{train_dir}/.env` and passed to the container — the same "gated → token on the box"
 path documented under `spark download`. The default klein-4B base needs none of this.
+
+### Large bases on a flaky link — prefetch + offline
+
+ai-toolkit downloads the base on first run, but a large base (klein-9B, dev) pulls
+multi-GB components — the DiT transformer, the **Qwen text encoder** (`Qwen/Qwen3-8B`
+for 9B, `Qwen/Qwen3-4B` for 4B), and the VAE. On an unreliable connection any one of
+these can stall mid-stream and hang the run, and ai-toolkit loads the text encoder by
+a **hardcoded repo id with no local-path option** — so it must be in the cache to
+train offline.
+
+`spark train fetch-base` pre-seeds the mounted HF cache (`{train_dir}/cache/huggingface`)
+with all three components using the bundled resume-safe downloader (8 retries,
+HTTP-Range resume), in the layout `from_pretrained` / `hf_hub_download` resolve with
+`HF_HUB_OFFLINE=1`. Then start the run offline so it never touches the network:
+
+```bash
+spark config set train_base_model black-forest-labs/FLUX.2-klein-base-9B
+spark config set train_arch flux2_klein_9b
+HF_TOKEN=hf_xxx spark train fetch-base            # resume-safe — re-run if the link drops
+SPARK_TRAIN_OFFLINE=1 spark train start ~/lora-training/my-art-style --trigger mystylexr
+```
+
+`SPARK_TRAIN_OFFLINE=1` sets `HF_HUB_OFFLINE=1` in the container, so every component
+loads from the seeded cache (no network). The token is only needed at `fetch-base`
+time for a gated base; the ungated text encoder and VAE seed regardless. For the
+default klein-4B base this is optional (its components are small enough to fetch
+inline).
 
 ## How it fits together
 
@@ -245,6 +277,7 @@ cache/huggingface/                             # base model + text encoder, fetc
 | Image runs but training errors immediately | image lacks ai-toolkit at the expected path | set `AITOOLKIT_RUN=<path to run.py>` in `{train_dir}/.env` |
 | `Cannot train — Docker is not usable` | daemon down / permission | same remedy as `spark comfy` — see the README Troubleshooting table |
 | Base download 401/403 | gated base (dev / klein-9B) without a token | accept the license on HF and re-run with `HF_TOKEN=…`, or use the default klein-4B (ungated) |
+| Run hangs at step 0 on a big base (download stalls mid-stream) | flaky link to HF on a multi-GB component (e.g. `Qwen/Qwen3-8B`) | pre-seed the cache with `spark train fetch-base` (resume-safe), then `SPARK_TRAIN_OFFLINE=1 spark train start …` — see "Large bases on a flaky link" above |
 | `state_dict` unexpected `*.weight_scale` keys | base is an fp8 checkpoint (e.g. comfy's `flux2_dev_fp8mixed`) | use a bf16 base via `train_base_model` (a HF repo), not an fp8 file — ai-toolkit fine-tunes full-precision weights |
 | `LoRA '<name>' is not in models/loras` at generate | not published / typo | `spark train status <name>` (publishes on complete), or check the loras dir |
 | Run won't resume | no checkpoint saved yet | needs ≥ one checkpoint (`--save-every` steps); check `spark train status --logs` |

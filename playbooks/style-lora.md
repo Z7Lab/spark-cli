@@ -27,6 +27,12 @@
       "title": "Ensure the ai-toolkit image is on the DGX",
       "precondition": { "where": "remote", "probe": "docker images -q {aitoolkit_image} 2>/dev/null", "ready_if": "nonempty" },
       "remedy": "spark config set aitoolkit_image <image>   # build from templates/train/Dockerfile.reference if needed",
+      "next": "prefetch-base"
+    },
+    {
+      "id": "prefetch-base",
+      "title": "Pre-seed the base for offline training (large/gated bases on a flaky link)",
+      "command": "spark train fetch-base",
       "next": "prepare-corpus"
     },
     {
@@ -62,10 +68,17 @@ license for your use:
 - **Default — `FLUX.2-klein-4B`**
   ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated,
   no token). ai-toolkit fetches it automatically. Nothing to set.
-- **`FLUX.2-dev`** ([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)) —
-  higher ceiling, gated. Opt in with
-  `spark config set train_base_model black-forest-labs/FLUX.2-dev` +
-  `spark config set train_arch flux2`, and an `HF_TOKEN` on the box.
+- **`FLUX.2-klein-9B`**
+  ([license](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-9B), gated) —
+  more capacity than 4B. Opt in with
+  `spark config set train_base_model black-forest-labs/FLUX.2-klein-base-9B` +
+  `spark config set train_arch flux2_klein_9b`, and an `HF_TOKEN` on the box. Its text
+  encoder is `Qwen/Qwen3-8B` (ungated). Use the **prefetch-base** step + offline start.
+
+**Not FLUX.2-dev.** dev (32B) is too large to fine-tune on a single 128 GB Spark
+(ai-toolkit [#531](https://github.com/ostris/ai-toolkit/issues/531), closed *not
+planned*; NVIDIA's Spark image fine-tuning targets the 12B FLUX.1-dev). It stays a
+generation / `refine` model only — see **use** below.
 
 If the user intends to sell, keep the default (klein-4B).
 
@@ -76,6 +89,24 @@ image); it does not build one. Point spark at a GB10/sm_121-ready image with
 `spark config set aitoolkit_image <image>`. To build your own, use
 `templates/train/Dockerfile.reference` (it bakes in the GB10 fixes: NGC 25.10 base,
 torchcodec/torchaudio handling, libGL). The first `spark train start` pulls the image.
+
+## prefetch-base
+
+**Skip for the default klein-4B** (its components are small and ungated — ai-toolkit
+fetches them inline on first run). For a **large or gated base (klein-9B, dev)** on a
+flaky link, pre-seed the HF cache first so training loads offline and never stalls
+mid-run:
+
+```bash
+HF_TOKEN=hf_xxx spark train fetch-base       # gated bases need the token here; resume-safe — re-run if the link drops
+```
+
+This pulls the DiT transformer, the Qwen text encoder (`Qwen/Qwen3-8B` for 9B), and the
+VAE into `{train_dir}/cache/huggingface` with the resume-safe downloader. ai-toolkit
+loads the text encoder by a hardcoded repo id with no local-path option, so for a
+reliable offline run it must be in the cache. Then start training with
+`SPARK_TRAIN_OFFLINE=1` (see the **train** step). `spark status` shows whether an
+`HF_TOKEN` is present on the box (the gated transformer needs one to download).
 
 ## prepare-corpus
 
@@ -99,7 +130,13 @@ Collect the **corpus** path and a **trigger** word. Recipe for a good style LoRA
 ## train
 
 Run `spark train start {corpus} --trigger {trigger} --steps {steps} --rank {rank}
---max-hours {max_hours}`. The box does **only** training while a session is live. It
+--max-hours {max_hours}`. If you pre-seeded a large/gated base in **prefetch-base**,
+prefix it with `SPARK_TRAIN_OFFLINE=1` so the base loads from the cache (no network, no
+mid-run stalls):
+
+    SPARK_TRAIN_OFFLINE=1 spark train start {corpus} --trigger {trigger} --steps {steps} --rank {rank} --max-hours {max_hours}
+
+The box does **only** training while a session is live. It
 checkpoints every ~250 steps and (with `--max-hours N`) auto-stops cleanly just after a
 checkpoint once the budget elapses. ai-toolkit writes sample images under
 `{train_dir}/output/<name>/samples/` each checkpoint — the live read on whether the
