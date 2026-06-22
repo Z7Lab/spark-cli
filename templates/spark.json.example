@@ -12,7 +12,7 @@
   "train_dir": "~/spark-train",
   "train_base_model": "black-forest-labs/FLUX.2-klein-base-4B",
   "train_arch": "flux2_klein_4b",
-  "aitoolkit_image": "ostris/aitoolkit:latest",
+  "aitoolkit_image": "",
   "tts_venv": "~/venvs/qwen-tts",
   "whisper_bin": "~/whisper.cpp/build/bin/whisper-server",
   "whisper_log": "~/whisper-server.log",

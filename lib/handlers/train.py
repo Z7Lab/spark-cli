@@ -131,6 +131,15 @@ def _deploy_assets(cfg: dict) -> None:
     weights. It does NOT ship a Dockerfile: the ai-toolkit image is operator-
     provided and digest-pinned (cfg.aitoolkit_image), like the ComfyUI image.
     """
+    # No invented default: spark uses only the image the operator configured. An
+    # unset aitoolkit_image fails fast here (before writing a broken .env) — there is
+    # no usable upstream ai-toolkit image for GB10/sm_121 to fall back to.
+    if not (cfg.get("aitoolkit_image") or "").strip():
+        print(fail("No ai-toolkit image configured (aitoolkit_image is unset)."))
+        print("  spark drives an operator-provided GB10/sm_121 ai-toolkit image — it does not build one.")
+        print(f"  Set it:  {cyan('spark config set aitoolkit_image <image[@sha256:…]>')}")
+        print(dim("  Build reference: templates/train/Dockerfile.reference (python3 + ai-toolkit run.py)."))
+        sys.exit(1)
     p = _paths(cfg, "_")
     root = p["root"]
     ssh(cfg, "mkdir -p " + " ".join(shlex.quote(f"{root}/{d}") for d in
