@@ -8,8 +8,8 @@
   "summary": "Download the models generate/animate need",
   "handler": "comfy.pull_models",
   "params": [
-    {"name": "set", "type": "string", "options": ["generate", "generate-klein", "animate", "qr-art", "all"], "default": "all",
-     "help": "Which model set to pull: generate (FLUX.2-dev), generate-klein (FLUX.2-klein-4B + Qwen3, for --base flux2-klein-4b), animate (LTX-2.3), qr-art (SD1.5+ControlNets), or all"}
+    {"name": "set", "type": "string", "options": ["generate", "generate-klein", "edit", "animate", "qr-art", "all"], "default": "all",
+     "help": "Which model set to pull: generate (FLUX.2-dev), generate-klein (FLUX.2-klein-4B + Qwen3, for --base flux2-klein-4b), edit (Qwen-Image-Edit, for spark comfy edit), animate (LTX-2.3), qr-art (SD1.5+ControlNets), or all"}
   ]
 }
 ```

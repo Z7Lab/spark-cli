@@ -44,8 +44,33 @@ got wrong — chiefly **garbled text** and soft detail — while keeping composi
 most style. The natural pairing: generate style on the **klein** base, then `refine` the
 keepers. Pass the original prompt (sign/label text in quotes) for the best text fix. The
 default refiner is FLUX.2-dev
-([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)). Targeted single-object
-edits are a separate, purpose-built edit model (tracked), not `refine`.
+([license](https://huggingface.co/black-forest-labs/FLUX.2-dev)).
+
+### Edit parts of an image by instruction — `spark comfy edit`
+
+```bash
+spark comfy pull-models --set edit                 # one-time: ~28 GB (Qwen-Image-Edit 2509 + Qwen2.5-VL + VAE)
+spark comfy edit photo.png "replace the blue sign with a round wall clock"
+spark comfy edit room.png "change the sofa to dark green leather" --seed 7
+```
+Instruction-driven editing with **Qwen-Image-Edit 2509**: the input image is encoded
+into the model's conditioning (`TextEncodeQwenImageEditPlus`), so it changes the element
+you describe while keeping the rest consistent. Defaults: 20 steps, cfg 4. The three
+edit tools, by scope: `generate --inpaint` repaints a fixed **rectangle**; `comfy edit`
+changes a **described element** anywhere; `comfy refine` re-renders the **whole** frame
+through a stronger base. First run loads ~28 GB (a few min), then ~30–60 s per edit.
+
+### Manage downloaded models — `spark comfy models` / `rm`
+
+```bash
+spark comfy models                  # list comfy models + sizes; flags reclaimable orphans
+spark comfy rm --orphans            # delete everything unreferenced by a catalog/template
+spark comfy rm ltx-2.3-22b-dev.safetensors
+```
+`models` flags a file **orphan** when no `spark comfy` command references it (not in the
+`pull-models` catalog or any `templates/` graph); user LoRAs under `loras/` and sharded
+HF checkpoints are never flagged. `rm` deletes by name or `--orphans` (typed
+confirmation unless `--yes`); re-fetch catalog models with `pull-models`.
 
 ## 2. Animate a still (LTX-2.3 image-to-video)
 
@@ -209,6 +234,9 @@ no token required.
 | `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `diffusion_models/flux-2-klein-base-4b.safetensors` |
 | `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `text_encoders/qwen_3_4b.safetensors` |
 | `generate-klein` (`--base flux2-klein-4b`) | `fwwrsd/comfy-org-flux2-klein-4b` | `vae/flux2-vae.safetensors` |
+| `edit` (`comfy edit`) | `Comfy-Org/Qwen-Image-Edit_ComfyUI` | `diffusion_models/qwen_image_edit_2509_fp8_e4m3fn.safetensors` |
+| `edit` (`comfy edit`) | `Comfy-Org/Qwen-Image_ComfyUI` | `text_encoders/qwen_2.5_vl_7b_fp8_scaled.safetensors` |
+| `edit` (`comfy edit`) | `Comfy-Org/Qwen-Image_ComfyUI` | `vae/qwen_image_vae.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3-fp8` | `checkpoints/ltx-2.3-22b-dev-fp8.safetensors` |
 | `animate` (LTX-2.3) | `Comfy-Org/ltx-2` | `text_encoders/gemma_3_12B_it_fp4_mixed.safetensors` |
 | `animate` (LTX-2.3) | `Lightricks/LTX-2.3` | `loras/ltx-2.3-22b-distilled-lora-384.safetensors` |

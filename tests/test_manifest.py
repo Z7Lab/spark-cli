@@ -90,7 +90,7 @@ class TestManifests(unittest.TestCase):
     def test_enum_becomes_schema_enum(self):
         schema = manifest.to_json_schema(self.routing["comfy"]["pull-models"]["spec"])
         self.assertEqual(schema["inputSchema"]["properties"]["set"]["enum"],
-                         ["generate", "generate-klein", "animate", "qr-art", "all"])
+                         ["generate", "generate-klein", "edit", "animate", "qr-art", "all"])
 
 
 if __name__ == "__main__":

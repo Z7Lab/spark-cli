@@ -108,6 +108,29 @@
         "flat": true,
         "label": "FLUX.2 VAE (shared)"
       }
+    ],
+    "edit": [
+      {
+        "repo_id": "Comfy-Org/Qwen-Image-Edit_ComfyUI",
+        "glob": "qwen_image_edit_2509_fp8_e4m3fn.safetensors",
+        "subdir": "diffusion_models",
+        "flat": true,
+        "label": "Qwen-Image-Edit 2509 DiT (fp8) \u2014 instruction image editing"
+      },
+      {
+        "repo_id": "Comfy-Org/Qwen-Image_ComfyUI",
+        "glob": "qwen_2.5_vl_7b_fp8_scaled.safetensors",
+        "subdir": "text_encoders",
+        "flat": true,
+        "label": "Qwen2.5-VL-7B text encoder (fp8) for Qwen-Image"
+      },
+      {
+        "repo_id": "Comfy-Org/Qwen-Image_ComfyUI",
+        "glob": "qwen_image_vae.safetensors",
+        "subdir": "vae",
+        "flat": true,
+        "label": "Qwen-Image VAE"
+      }
     ]
   },
   "tts": {

@@ -48,9 +48,12 @@ spark llm reports [--out F]                        Render saved bench+probe resu
 spark comfy <start|stop|status|logs|queue>        Manage AEON-Spark ComfyUI (port 8188)
 spark comfy generate "<prompt>" [--lora N] [--base B] [--turbo]  FLUX.2 text-to-image (+ trained LoRA; --base flux2-klein-4b for klein LoRAs; --turbo = few-step)
 spark comfy refine <image> ["<prompt>"]           Re-run an image through a stronger model (fix text/detail; img2img @ denoise 0.5)
+spark comfy edit <image> "<instruction>"          Instruction image edit (Qwen-Image-Edit; replace/change parts)
 spark comfy animate <image> "<prompt>"            LTX-2.3 image-to-video, downloads the MP4
 spark comfy qr-art <url> [--style --mode]         Scannable QR-code art (ControlNet)
-spark comfy pull-models [--set generate|generate-klein|animate|qr-art|all]  Download the models those commands need
+spark comfy models                                List downloaded ComfyUI models + sizes, flag reclaimable orphans
+spark comfy rm <file> | --orphans                 Delete ComfyUI model file(s) to free disk
+spark comfy pull-models [--set generate|generate-klein|edit|animate|qr-art|all]  Download the models those commands need
 
 # Style-LoRA training (FLUX.2, on the dedicated DGX)
 spark train start <corpus> --trigger <word>       Train a FLUX.2 style LoRA from a corpus of images

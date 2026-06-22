@@ -11,7 +11,7 @@ from pathlib import Path
 from sparkcore import (
     REPO_ROOT, bold, dim, red, green, yellow, cyan, ok, warn, fail,
     ssh, docker_probe, _docker_env, print_docker_remedy,
-    _models_catalog, _run_pull,
+    _models_catalog, _run_pull, _human,
 )
 
 # Few-step distilled FLUX.2 LoRA used by `generate --turbo` (the "step distillation"
@@ -687,6 +687,272 @@ def refine(params, cfg):
     return r
 
 
+def edit(params, cfg):
+    """Edit an image by instruction with Qwen-Image-Edit 2509 (replace/change parts of
+    an image, e.g. 'replace the sign with a clock'). The reference image is baked into
+    the conditioning by TextEncodeQwenImageEditPlus, so it edits the whole image
+    semantically — for a stronger text renderer over the whole frame use `comfy refine`."""
+    import random, uuid, mimetypes, urllib.request, urllib.parse, urllib.error
+
+    image  = params["image"]
+    prompt = params["prompt"]
+    seed   = params["seed"] if params.get("seed") is not None else random.randint(1, 2**31 - 1)
+    steps  = params["steps"] if params.get("steps") is not None else 20
+    cfgv   = params["cfg"] if params.get("cfg") is not None else 4.0
+    out    = params.get("out")
+    base   = f"http://{cfg['dgx_host']}:{cfg['comfy_port']}"
+
+    ip = Path(image).expanduser()
+    if not ip.is_file():
+        print(fail(f"Image not found: {image}")); sys.exit(1)
+
+    def _get(path):
+        return json.load(urllib.request.urlopen(base + path, timeout=60))
+
+    print(f"Editing  {cyan(ip.name)}  {dim(f'(steps {steps}, cfg {cfgv}, seed {seed})')}")
+    print(f"  Edit: {cyan(prompt)}")
+    print(dim("  Waiting for ComfyUI to be ready..."))
+    rdeadline = time.time() + 600
+    while time.time() < rdeadline:
+        try:
+            with urllib.request.urlopen(base + "/system_stats", timeout=10) as r:
+                if r.status == 200:
+                    break
+        except Exception:
+            pass
+        time.sleep(5)
+    else:
+        print(fail(f"ComfyUI at {base} didn't become ready (10 min).  "
+                   f"Check: {cyan('spark comfy status')}")); sys.exit(1)
+
+    # Upload the image to edit (same multipart upload as generate --init).
+    boundary = "----spark" + uuid.uuid4().hex
+    ictype = mimetypes.guess_type(str(ip))[0] or "application/octet-stream"
+    body = (f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; "
+            f"filename=\"{ip.name}\"\r\nContent-Type: {ictype}\r\n\r\n").encode() + ip.read_bytes() + \
+           (f"\r\n--{boundary}\r\nContent-Disposition: form-data; name=\"overwrite\"\r\n\r\n"
+            f"true\r\n--{boundary}--\r\n").encode()
+    up = None
+    for _ in range(5):
+        try:
+            up = json.load(urllib.request.urlopen(urllib.request.Request(
+                base + "/upload/image", data=body,
+                headers={"Content-Type": f"multipart/form-data; boundary={boundary}"}), timeout=120))
+            break
+        except (urllib.error.URLError, OSError):
+            time.sleep(5)
+    if up is None:
+        print(fail(f"Couldn't upload the image to ComfyUI at {base}.")); sys.exit(1)
+    iname = up.get("name", ip.name)
+
+    # Qwen-Image-Edit 2509 graph (full-quality path of ComfyUI's bundled template,
+    # minus the optional Lightning 4-step LoRA + switch machinery). The reference
+    # image is encoded into the conditioning by TextEncodeQwenImageEditPlus, so
+    # KSampler runs at denoise 1.0 and the latent only sets output dimensions.
+    g = {
+        "1":  {"class_type": "UNETLoader", "inputs": {"unet_name": "qwen_image_edit_2509_fp8_e4m3fn.safetensors", "weight_dtype": "default"}},
+        "2":  {"class_type": "ModelSamplingAuraFlow", "inputs": {"model": ["1", 0], "shift": 3.0}},
+        "3":  {"class_type": "CFGNorm", "inputs": {"model": ["2", 0], "strength": 1.0}},
+        "4":  {"class_type": "CLIPLoader", "inputs": {"clip_name": "qwen_2.5_vl_7b_fp8_scaled.safetensors", "type": "qwen_image"}},
+        "5":  {"class_type": "VAELoader", "inputs": {"vae_name": "qwen_image_vae.safetensors"}},
+        "6":  {"class_type": "LoadImage", "inputs": {"image": iname}},
+        "7":  {"class_type": "FluxKontextImageScale", "inputs": {"image": ["6", 0]}},
+        "8":  {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"clip": ["4", 0], "vae": ["5", 0], "image1": ["7", 0], "prompt": prompt}},
+        "9":  {"class_type": "TextEncodeQwenImageEditPlus", "inputs": {"clip": ["4", 0], "vae": ["5", 0], "image1": ["7", 0], "prompt": ""}},
+        "10": {"class_type": "VAEEncode", "inputs": {"pixels": ["7", 0], "vae": ["5", 0]}},
+        "11": {"class_type": "KSampler", "inputs": {"model": ["3", 0], "positive": ["8", 0], "negative": ["9", 0],
+               "latent_image": ["10", 0], "seed": seed, "steps": steps, "cfg": cfgv,
+               "sampler_name": "euler", "scheduler": "simple", "denoise": 1.0}},
+        "12": {"class_type": "VAEDecode", "inputs": {"samples": ["11", 0], "vae": ["5", 0]}},
+        "13": {"class_type": "SaveImage", "inputs": {"images": ["12", 0], "filename_prefix": "spark_edit"}},
+    }
+
+    pid = None
+    for _ in range(5):
+        try:
+            req = urllib.request.Request(base + "/prompt", data=json.dumps({"prompt": g}).encode(),
+                                         headers={"Content-Type": "application/json"})
+            pid = json.load(urllib.request.urlopen(req, timeout=120))["prompt_id"]
+            break
+        except urllib.error.HTTPError as e:
+            print(fail(f"ComfyUI rejected the request: {e.read().decode()[:600]}")); sys.exit(1)
+        except (urllib.error.URLError, OSError):
+            time.sleep(5)
+    if not pid:
+        print(fail(f"Couldn't submit to ComfyUI at {base}.")); sys.exit(1)
+
+    print(dim("  Submitted — sampling (first run loads ~28 GB into memory, a few min)..."))
+    t0 = time.time()
+    img = None
+    while time.time() - t0 < 1800:
+        time.sleep(4)
+        try:
+            h = _get("/history/" + pid)
+        except Exception:
+            continue
+        if pid in h:
+            st = h[pid].get("status", {})
+            if st.get("status_str") == "error":
+                print("\n" + fail("Edit failed:"))
+                print(f"  {json.dumps(st.get('messages', []))[:800]}"); sys.exit(1)
+            for node_out in h[pid].get("outputs", {}).values():
+                for im in node_out.get("images", []):
+                    img = im
+            if img:
+                break
+            if st.get("completed") or st.get("status_str") == "success":
+                print("\n" + fail("Finished but returned no image (cached?). "
+                                  "Re-run with a different --seed.")); sys.exit(1)
+        print(f"\r  ...{int(time.time() - t0)}s", end="", flush=True)
+    print()
+    if not img:
+        print(fail("Timed out waiting for the edit (30 min).")); sys.exit(1)
+
+    q = urllib.parse.urlencode({"filename": img["filename"], "subfolder": img.get("subfolder", ""),
+                                "type": img.get("type", "output")})
+    data = urllib.request.urlopen(base + "/view?" + q, timeout=120).read()
+    if not out:
+        out = str(Path.cwd() / img["filename"])
+    Path(out).write_bytes(data)
+    print(ok(f"Edited image saved: {cyan(out)}  {dim(f'({len(data)//1024} KB, {int(time.time() - t0)}s)')}"))
+    print(dim(f"  On DGX: /opt/spark/comfyui/workspace/output/{img['filename']}"))
+    return {"action": "comfy.edit", "out": out, "seed": seed, "image": str(ip),
+            "steps": steps, "bytes": len(data), "filename": img["filename"]}
+
+
+def _comfy_models_dir(cfg):
+    return f"{cfg['comfy_dir']}/workspace/models"
+
+
+def _referenced_models(cfg):
+    """Basenames of model files referenced by the pull-models catalog or any frozen
+    graph in templates/ — i.e. files some `spark comfy` command actually loads."""
+    import os, re, glob
+    refs = set()
+    try:
+        cat, _ = _models_catalog()
+        for entries in cat.get("comfy", {}).values():
+            for e in entries:
+                g = e.get("glob") or ""
+                if g:
+                    refs.add(os.path.basename(g))
+                if e.get("rename"):
+                    refs.add(os.path.basename(e["rename"]))
+    except Exception:
+        pass
+    for fn in glob.glob(os.path.join(REPO_ROOT, "templates", "*.json")):
+        try:
+            txt = open(fn, encoding="utf-8").read()
+        except OSError:
+            continue
+        for m in re.findall(r'[A-Za-z0-9_.\-]+\.(?:safetensors|ckpt|pt|pth|gguf|bin)', txt):
+            refs.add(os.path.basename(m))
+    return refs
+
+
+def _list_comfy_models(cfg):
+    """[(size_bytes, relpath, basename, is_orphan), ...] for model files on the box,
+    biggest first. Orphan = not referenced by catalog/templates AND not a user LoRA
+    (loras/ holds trained/user weights — never auto-flagged)."""
+    import shlex
+    mdir = _comfy_models_dir(cfg)
+    raw = ssh(cfg, "find " + shlex.quote(mdir) + r" -type f \( -name '*.safetensors' "
+              r"-o -name '*.ckpt' -o -name '*.pt' -o -name '*.pth' -o -name '*.gguf' \) "
+              r"-printf '%s\t%P\n' 2>/dev/null | sort -rn")
+    refs = _referenced_models(cfg)
+    rows = []
+    import os
+    for line in raw.strip().splitlines():
+        if "\t" not in line:
+            continue
+        size_s, rel = line.split("\t", 1)
+        try:
+            size = int(size_s)
+        except ValueError:
+            continue
+        base = os.path.basename(rel)
+        is_lora = rel.split("/", 1)[0] == "loras"
+        # A sharded HF checkpoint (model-00001-of-00005.safetensors, or any
+        # *-NNNNN-of-NNNNN.*) is loaded by its directory, not by filename — never
+        # flag those as orphans (the catalog/template won't name each shard).
+        import re as _re
+        is_shard = bool(_re.search(r'\d{3,}-of-\d{3,}', base))
+        orphan = (base not in refs) and not is_lora and not is_shard
+        rows.append((size, rel, base, orphan))
+    return rows
+
+
+def models(params, cfg):
+    """List downloaded ComfyUI model files with sizes, flagging orphans (not used by
+    any `spark comfy` command's catalog/template). Surfaces what's reclaimable."""
+    rows = _list_comfy_models(cfg)
+    if not rows:
+        print(warn("No ComfyUI model files found (is the box reachable / path set?)"))
+        return {"action": "comfy.models", "files": 0}
+    total = sum(r[0] for r in rows)
+    orphans = [r for r in rows if r[3]]
+    orphan_bytes = sum(r[0] for r in orphans)
+    cur = None
+    for size, rel, base, orphan in rows:
+        top = rel.split("/", 1)[0] if "/" in rel else "."
+        if top != cur:
+            cur = top
+            print(bold(f"\n  {top}/"))
+        tag = red("  orphan") if orphan else ""
+        print(f"    {_human(size):>9}  {base}{tag}")
+    print(bold(f"\n  {_human(total)} total") +
+          (f"   {red(_human(orphan_bytes) + ' reclaimable')} in {len(orphans)} orphan(s)"
+           if orphans else "   " + green("no orphans")))
+    if orphans:
+        print(dim(f"  Reclaim: {cyan('spark comfy rm --orphans')}  (or rm <file>)"))
+    return {"action": "comfy.models", "files": len(rows), "bytes": total,
+            "orphans": len(orphans), "orphan_bytes": orphan_bytes}
+
+
+def rm(params, cfg):
+    """Delete ComfyUI model file(s) from disk — a named file, or every orphan with
+    --orphans. Destructive; confirms unless --yes. Never touches loras/ via --orphans."""
+    import shlex, os
+    target = params.get("file")
+    do_orphans = params.get("orphans")
+    assume_yes = params.get("yes")
+    mdir = _comfy_models_dir(cfg)
+
+    if do_orphans:
+        sel = [(s, rel) for s, rel, base, orphan in _list_comfy_models(cfg) if orphan]
+        label = "all orphans"
+    elif target:
+        sel = [(s, rel) for s, rel, base, orphan in _list_comfy_models(cfg)
+               if base == target or rel == target or target.lower() in base.lower()]
+        label = target
+    else:
+        print(fail("Give a <file> to delete, or --orphans. List them: "
+                   + cyan("spark comfy models"))); sys.exit(1)
+    if not sel:
+        print(fail(f"No ComfyUI model matches '{label}'.  See {cyan('spark comfy models')}.")); sys.exit(1)
+
+    total = sum(s for s, _ in sel)
+    print(bold(f"Delete {len(sel)} ComfyUI model file(s) — {label}") + dim(f"  ({_human(total)})"))
+    for s, rel in sel:
+        print(f"    {_human(s):>9}  {rel}")
+    print(dim("  Frees disk; irreversible (re-fetch with spark comfy pull-models)."))
+    if not assume_yes:
+        word = "orphans" if do_orphans else "delete"
+        try:
+            ans = input(f"\n  Type {bold(word)} to confirm: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            ans = ""
+        if ans != word:
+            print(red("  Cancelled — nothing deleted.")); sys.exit(1)
+
+    paths = [shlex.quote(f"{mdir}/{rel}") for _, rel in sel]
+    ssh(cfg, "rm -f " + " ".join(paths))
+    free = ssh(cfg, f"df -h {shlex.quote(mdir)} 2>/dev/null | tail -1 | awk '{{print $4}}'")
+    print(ok(f"Deleted {len(sel)} file(s) — freed {_human(total)}.") +
+          dim(f"  Now {free.strip()} free."))
+    return {"action": "comfy.rm", "files": len(sel), "freed_bytes": total}
+
+
 HANDLERS = {
     "comfy.start":       start,
     "comfy.stop":        stop,
@@ -695,7 +961,10 @@ HANDLERS = {
     "comfy.logs":        logs,
     "comfy.generate":    generate,
     "comfy.refine":      refine,
+    "comfy.edit":        edit,
     "comfy.animate":     animate,
     "comfy.pull_models": pull_models,
+    "comfy.models":      models,
+    "comfy.rm":          rm,
     "comfy.qr_art":      qr_art,
 }
