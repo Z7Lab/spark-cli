@@ -67,7 +67,7 @@ def status(params, cfg):
     state = {"action": "core.status", "host": host,
              "config_present": CONFIG_PATH.exists(), "ssh": "connected",
              "instances": [], "vllm": None, "comfy": None,
-             "whisper": None, "ram": None, "disk": None}
+             "whisper": None, "ram": None, "disk": None, "gpu": None}
 
     # Detect server type — one llama-server per loaded model
     instances = _llm_instances(cfg)
@@ -159,6 +159,16 @@ def status(params, cfg):
     state["disk"] = disk or None
     if disk:
         print(f"  Disk     {disk}")
+
+    # GPU temperature / throttle (one line; full detail in `spark temp`)
+    g = _gpu_query(cfg)
+    state["gpu"] = g
+    if g and g["temp"] is not None:
+        t = g["temp"]
+        tcolor = green if t < 70 else yellow if t < 84 else red
+        u = f", {g['util']:.0f}% util" if g["util"] is not None else ""
+        thr = red("  THROTTLING: " + ", ".join(g["throttling"])) if g["throttling"] else ""
+        print(f"  GPU      {tcolor(f'{t:.0f}°C')}{u}{thr}")
 
     return state
 
@@ -324,6 +334,78 @@ def config_set(params, cfg):
             "value": value, "config_path": str(CONFIG_PATH)}
 
 
+# nvidia-smi clocks_event_reasons.active bits → (label, is_throttle). GPU-idle and
+# applications-clock settings are informational; the rest mean clocks are being capped.
+_CLOCK_EVENT_BITS = [
+    (0x0001, "idle", False),
+    (0x0002, "app clocks setting", False),
+    (0x0004, "SW power cap", True),
+    (0x0008, "HW slowdown", True),
+    (0x0010, "sync boost", False),
+    (0x0020, "SW thermal slowdown", True),
+    (0x0040, "HW thermal slowdown", True),
+    (0x0080, "HW power brake", True),
+    (0x0100, "display clock setting", False),
+]
+
+
+def _gpu_query(cfg):
+    """Parse one line of nvidia-smi GPU telemetry over SSH, or None if unavailable.
+    Decodes the clocks-event bitmask into active reasons + which are throttling."""
+    fields = "name,temperature.gpu,utilization.gpu,power.draw,clocks.sm,clocks_event_reasons.active"
+    raw = ssh(cfg, f"nvidia-smi --query-gpu={fields} --format=csv,noheader,nounits 2>/dev/null | head -1")
+    raw = (raw or "").strip()
+    if not raw or "," not in raw:
+        return None
+    parts = [p.strip() for p in raw.split(",")]
+
+    def num(i):
+        try:
+            return float(parts[i])
+        except (IndexError, ValueError):
+            return None
+
+    try:
+        bits = int(parts[5], 16)
+    except (IndexError, ValueError):
+        bits = 0
+    active = [(label, throt) for mask, label, throt in _CLOCK_EVENT_BITS if bits & mask]
+    return {"name": parts[0] if parts else "GPU",
+            "temp": num(1), "util": num(2), "power": num(3), "sm_mhz": num(4),
+            "events_hex": parts[5] if len(parts) > 5 else "0x0",
+            "reasons": [l for l, _ in active],
+            "throttling": [l for l, t in active if t]}
+
+
+def temp(params, cfg):
+    """Show GPU temperature, utilization, power, SM clock + active throttle reasons.
+    Read-only; thermal SAFETY throttling is automatic in GB10 hardware regardless."""
+    g = _gpu_query(cfg)
+    if not g:
+        print(fail("Couldn't read GPU telemetry from nvidia-smi on the DGX."))
+        print(dim(f"  Check SSH/host with {cyan('spark status')}."))
+        return {"action": "core.temp", "available": False}
+    print(bold(g["name"]))
+    t = g["temp"]
+    if t is not None:
+        tcolor = green if t < 70 else yellow if t < 84 else red
+        print(f"  Temp      {tcolor(f'{t:.0f}°C')}")
+    if g["util"] is not None:
+        print(f"  Util      {g['util']:.0f}%")
+    if g["power"] is not None:
+        print(f"  Power     {g['power']:.0f} W")
+    if g["sm_mhz"] is not None:
+        print(f"  SM clock  {g['sm_mhz']:.0f} MHz")
+    if g["throttling"]:
+        print(f"  Throttle  {red('THROTTLING — ' + ', '.join(g['throttling']))}")
+    elif g["reasons"]:
+        print(f"  Clocks    {dim(', '.join(g['reasons']))}")
+    else:
+        print(f"  Throttle  {green('none')}")
+    print(dim("  Thermal-safety throttling is automatic in GB10 hardware."))
+    return {"action": "core.temp", "available": True, **g}
+
+
 def disk(params, cfg):
     """Show DGX disk usage and the biggest spark-managed consumers."""
     if params.get("prune"):
@@ -408,6 +490,7 @@ HANDLERS = {
     "core.config":     config,
     "core.config_set": config_set,
     "core.status":     status,
+    "core.temp":       temp,
     "core.disk":       disk,
     "core.models":     models,
     "core.download":   download,
