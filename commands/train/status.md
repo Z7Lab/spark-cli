@@ -18,9 +18,16 @@ Reads the run-state the in-container watchdog writes and shows the status
 (`training` / `stopping` / `paused` / `complete` / `error`), step progress, elapsed
 time, a rough ETA to the target, and whether a dedicated session is live.
 
+It also prints the **next action** for the run's state: `pause:` (the `spark train
+pause` command) while a run is actively training, `resume:` once it's paused/stopped,
+and the `spark comfy generate --lora` command once it's `complete`.
+
+The step count is the latest **saved checkpoint** (every `save_every` steps), so it can
+lag the live step by up to one interval — `--logs` shows the live step. A pending pause
+shows as `◐ stopping after next checkpoint`.
+
 When a run is `complete`, it publishes the latest checkpoint into ComfyUI's
-`models/loras/` as `<name>.safetensors` and prints the `spark comfy generate --lora`
-command to use it. Pass `--logs` to follow the live training output.
+`models/loras/` as `<name>.safetensors`. Pass `--logs` to follow the live training output.
 
 With no run name it picks the only run, or lists the runs if several exist.
 

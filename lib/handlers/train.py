@@ -605,6 +605,9 @@ def status(params, cfg):
         print(f"    {warn('complete but no checkpoint found to publish')}")
     elif not running and status_str in ("paused", "stopping"):
         print(f"    {dim('resume:')} {cyan('spark train resume ' + name)}")
+    elif running and status_str == "training":
+        print(f"    {dim('pause:')}  {cyan('spark train pause ' + name)}"
+              f"  {dim('(stops cleanly after the next checkpoint)')}")
     return {"action": "train.status", "name": name, "running": running,
             "state": st, "published": published}
 
