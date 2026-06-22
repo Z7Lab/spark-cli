@@ -23,3 +23,6 @@ When a run is `complete`, it publishes the latest checkpoint into ComfyUI's
 command to use it. Pass `--logs` to follow the live training output.
 
 With no run name it picks the only run, or lists the runs if several exist.
+
+For a quick "is a run training right now, and how hot is the box," `spark temp` shows the
+live run + uptime next to GPU temp/util; `spark train status` is the detailed progress view.

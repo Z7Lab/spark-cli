@@ -15,11 +15,17 @@ utilization, power draw, SM clock, and any **active throttle reasons** (decoded 
 `clocks_event_reasons.active`). `spark status` shows a one-line summary (temp + util,
 and a `THROTTLING` flag if clocks are being capped); `spark temp` is the detail view.
 
-It also reports a **`Running`** line — what's actively on the GPU and how long it's
-been going: a live **training** run (`spark train` — the `spark-train-<name>` container
-is the ground truth, with its step progress + elapsed) and any **inference**
-llama-servers (model · quant · port, with process uptime). If nothing GPU-bound is up,
-it says so.
+It also reports a **`Running`** line — what's actively on the GPU and **for how long**,
+plus the command to get that thing's detail. By design `temp` owns only *what + uptime*
+and **points** to the owner of the detail rather than re-deriving it (so a number like
+step progress has a single source and can't drift):
+
+- a live **training** run → detected from the `spark-train-<name>` container (ground
+  truth — state files can go stale); shows the run + uptime, points to
+  `spark train status <name>` for step/ETA.
+- **inference** llama-servers → model · port + process uptime, points to `spark llm list`
+  for quants/footprints.
+- nothing GPU-bound up → it says so.
 
 ```bash
 spark temp
@@ -29,12 +35,12 @@ Example under a training load:
 
 ```
 NVIDIA GB10
-  Temp      80°C
+  Temp      76°C
   Util      96%
-  Power     60 W
+  Power     59 W
   SM clock  2385 MHz
   Throttle  none
-  Running   training  mydemo9b — step 500/2000 (25%)  up 1h54m
+  Running   training mydemo9b  up 2h17m  → spark train status mydemo9b
 ```
 
 Throttle reasons that mean clocks are being limited — *SW power cap*, *HW/SW thermal

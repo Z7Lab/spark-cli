@@ -409,12 +409,14 @@ def _dur(seconds) -> str:
 
 
 def _active_gpu_workloads(cfg: dict) -> list:
-    """What's actively using the GPU, with how long it's been running:
-    a live training run (the spark-train-<name> container is ground truth — state
-    files can go stale) and any running llama-servers. [{kind, detail, uptime}]."""
+    """What's actively using the GPU and for how long, plus the command to get its
+    detail — temp owns "what + uptime"; progress/footprints belong to those commands
+    (one owner per number, no drift). [{kind, detail, uptime, hint}].
+
+    A live training run is detected from the spark-train-<name> container (ground
+    truth — state files can go stale); inference from running llama-servers."""
     import re
     work = []
-    # Training — a running container is the authoritative signal.
     try:
         name = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=spark-train- "
                    "--format '{{.Names}}' 2>/dev/null | head -1").strip()
@@ -422,26 +424,21 @@ def _active_gpu_workloads(cfg: dict) -> list:
         name = ""
     if name.startswith("spark-train-"):
         run = name[len("spark-train-"):]
-        st = None
+        uptime = "?"
         if re.fullmatch(r"[A-Za-z0-9_-]+", run):   # safe to interpolate
             raw = ssh(cfg, f"cat {cfg['train_dir'].rstrip('/')}/state/{run}.json 2>/dev/null || true")
             try:
                 st = json.loads(raw) if raw.strip() else None
             except ValueError:
                 st = None
-        if st:
-            cur, tgt = st.get("current_step", 0), st.get("target_steps", 0)
-            pct = f" ({100 * cur // tgt}%)" if tgt else ""
-            work.append({"kind": "training", "detail": f"{run} — step {cur}/{tgt}{pct}",
-                         "uptime": _dur(st.get("elapsed_seconds"))})
-        else:
-            work.append({"kind": "training", "detail": run, "uptime": "?"})
-    # Inference — running llama-servers; uptime from the process elapsed time.
+            if st:
+                uptime = _dur(st.get("elapsed_seconds"))
+        work.append({"kind": "training", "detail": run, "uptime": uptime,
+                     "hint": f"spark train status {run}"})
     for i in _llm_instances(cfg):
         et = ssh(cfg, f"ps -o etimes= -p {int(i['pid'])} 2>/dev/null || true").strip()
-        work.append({"kind": "inference",
-                     "detail": f"{i['name']} {i['quant']} :{i['port']}",
-                     "uptime": _dur(et) if et.isdigit() else "?"})
+        work.append({"kind": "inference", "detail": f"{i['name']} :{i['port']}",
+                     "uptime": _dur(et) if et.isdigit() else "?", "hint": "spark llm list"})
     return work
 
 
@@ -471,14 +468,15 @@ def temp(params, cfg):
         print(f"  Clocks    {dim(', '.join(g['reasons']))}")
     else:
         print(f"  Throttle  {green('none')}")
-    # What's actually running on the GPU, and for how long.
+    # What's on the GPU + how long; the detail lives in the pointed-to command.
     work = _active_gpu_workloads(cfg)
     if work:
-        print(f"  Running   {work[0]['kind']}  {work[0]['detail']}  {dim('up ' + work[0]['uptime'])}")
-        for w in work[1:]:
-            print(f"            {w['kind']}  {w['detail']}  {dim('up ' + w['uptime'])}")
+        for idx, w in enumerate(work):
+            label = "Running" if idx == 0 else ""
+            print(f"  {label:<8}  {w['kind']} {cyan(w['detail'])}  {dim('up ' + w['uptime'])}"
+                  f"  {dim('→ ' + w['hint'])}")
     else:
-        print(f"  Running   {dim('nothing (no training run or inference server)')}")
+        print(f"  {'Running':<8}  {dim('nothing (no training run or inference server)')}")
     print(dim("  Thermal-safety throttling is automatic in GB10 hardware."))
     return {"action": "core.temp", "available": True, "workloads": work, **g}
 

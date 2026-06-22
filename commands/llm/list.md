@@ -14,3 +14,6 @@
 One line per loaded llama-server: port, name, quant, on-disk footprint, and pid,
 plus the resident total and free memory. The live processes are the source of
 truth, so the list can never drift from reality.
+
+`spark temp` also flags running inference servers (model · port + uptime) next to GPU
+load; come here for the quants/footprints/memory detail.
