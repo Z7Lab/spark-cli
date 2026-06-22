@@ -146,7 +146,10 @@ def _deploy_assets(cfg: dict) -> None:
              ("datasets", "configs", "output", "state", "control", "logs", "bin", "cache/huggingface")))
     print(dim(f"Syncing training stack → {cfg['dgx_host']}:{root}"))
     pairs = [(_ASSETS / "compose.yaml", f"{root}/compose.yaml"),
-             (REPO_ROOT / "bin" / "spark_train.py", f"{root}/bin/spark_train.py")]
+             (REPO_ROOT / "bin" / "spark_train.py", f"{root}/bin/spark_train.py"),
+             # spark_train.py imports the shared watchdog — deploy it alongside or the
+             # in-container `import spark_watchdog` fails at launch.
+             (REPO_ROOT / "bin" / "spark_watchdog.py", f"{root}/bin/spark_watchdog.py")]
     for local, remote in pairs:
         if not _scp(cfg, local, remote):
             print(fail(f"Could not deploy {local.name} to the DGX (scp failed).")); sys.exit(1)

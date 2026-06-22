@@ -115,6 +115,14 @@ class TestTrainHelpers(unittest.TestCase):
         train.ssh = lambda cfg, cmd, **kw: ""
         self.assertIsNone(train._publish(self.cfg, "mystyle"))
 
+    def test_deploy_ships_shared_watchdog(self):
+        # spark_train.py does `import spark_watchdog`; the deploy MUST ship it alongside
+        # or the in-container launch dies with ModuleNotFoundError. Guards that regression.
+        import inspect
+        self.assertIn("spark_watchdog.py", inspect.getsource(train._deploy_assets))
+        wd = Path(__file__).resolve().parent.parent / "bin" / "spark_watchdog.py"
+        self.assertTrue(wd.is_file(), "bin/spark_watchdog.py missing")
+
 
 class TestWatchdog(unittest.TestCase):
     def test_latest_step_parses_and_ignores_optimizer(self):

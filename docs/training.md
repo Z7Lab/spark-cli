@@ -4,6 +4,12 @@ Train a FLUX.2 **style LoRA** from a corpus of images on the DGX Spark. spark
 provides the **framework** — the trainer, the time-boxed/resumable session control,
 and the inference wiring; the corpus and its rights are **yours**.
 
+> **Fine-tuning an LLM instead?** This page is image style-LoRAs. To fine-tune a
+> small **coder LLM** (Unsloth QLoRA → GGUF, served via `spark llm serve`), see
+> **[docs/finetune.md](finetune.md)** — same dedicated-box, time-boxed,
+> resumable workflow, sharing the [bin/spark_watchdog.py](../bin/spark_watchdog.py)
+> machinery.
+
 > **Base model.** The default is **FLUX.2-klein-4B**
 > ([Apache-2.0](https://huggingface.co/black-forest-labs/FLUX.2-klein-base-4B), ungated,
 > no token). **FLUX.2-klein-9B**

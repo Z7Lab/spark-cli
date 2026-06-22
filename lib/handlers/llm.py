@@ -2,15 +2,18 @@
 
 from __future__ import annotations
 
+import json
 import re
+import shlex
+import subprocess
 import sys
 import time
 import webbrowser
 from pathlib import Path
 
 from sparkcore import (
-    bold, dim, red, green, yellow, cyan, ok, warn, fail,
-    ssh, ssh_screen,
+    REPO_ROOT, bold, dim, red, green, yellow, cyan, ok, warn, fail,
+    ssh, ssh_screen, _docker_env, docker_probe, print_docker_remedy,
     _llm_instances, _parse_quant, _quant_glob, _du_bytes, _free_bytes,
     _kv_cache_bytes, _comfy_mem_bytes, _human, _port_log, _models_catalog, _run_pull,
     _engine_state,
@@ -820,16 +823,17 @@ def reports_cmd(params, cfg):
     return {"action": "llm.reports", "out": params.get("out")}
 
 
+
 HANDLERS = {
-    "llm.serve":       serve,
-    "llm.bench":       bench,
-    "llm.probe":       probe,
-    "llm.reports":     reports_cmd,
-    "llm.rm":          rm,
-    "llm.list":        ls,
-    "llm.unload":      unload,
-    "llm.stop":        stop,
-    "llm.logs":        logs,
-    "llm.open":        open_ui,
-    "llm.pull_models": pull_models,
+    "llm.serve":            serve,
+    "llm.bench":            bench,
+    "llm.probe":            probe,
+    "llm.reports":          reports_cmd,
+    "llm.rm":               rm,
+    "llm.list":             ls,
+    "llm.unload":           unload,
+    "llm.stop":             stop,
+    "llm.logs":             logs,
+    "llm.open":             open_ui,
+    "llm.pull_models":      pull_models,
 }

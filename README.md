@@ -44,6 +44,11 @@ spark llm open [--port N]                         Open built-in chat UI in brows
 spark llm bench [<model>] [--runs N]              Measure a loaded model's speed (tokens/sec)
 spark llm probe [<model>] [--serve --unload]      Verify tool-calling & prompt adherence (needs: pipx install llm-probe)
 spark llm reports [--out F]                        Render saved bench+probe results (reports/) as a Markdown table
+spark finetune start <dataset.jsonl> [--base R]     Fine-tune a small coder (Unsloth QLoRA) from a messages JSONL → GGUF
+            [--epochs N --rank N --max-hours N]         time-boxed, resumable; publishes to models_dir for spark llm serve
+spark finetune status [name] [--logs]         Watch fine-tune progress / ETA / the published GGUF
+spark finetune pause [name]                   Stop a fine-tune after a checkpoint (resumable)
+spark finetune resume [name] [--max-hours N]  Continue a paused fine-tune from its latest checkpoint
 
 # Image / video generation
 spark comfy <start|stop|status|logs|queue>        Manage AEON-Spark ComfyUI (port 8188)
@@ -273,6 +278,54 @@ Set a GB10/sm_121-compatible ai-toolkit image with `spark config set aitoolkit_i
 
 📖 **[docs/training.md](docs/training.md)** — corpus prep, captioning, the
 resume-in-chunks workflow, tuning (`--steps`/`--rank`), and troubleshooting.
+
+## LLM fine-tuning (Unsloth QLoRA)
+
+Teach a small coder model **your conventions/behavior** by fine-tuning it on the DGX,
+then serve the result on the existing llama.cpp path. Like style-LoRA training, it
+runs **Unsloth** in a **dedicated**, operator-provided, digest-pinned image (`spark
+config set unsloth_image …`) driven through a detached `screen` session over SSH;
+spark deploys only the orchestration ([templates/finetune/](templates/finetune/):
+compose + the shared watchdog + the trainer) and pulls the image on first run.
+
+```bash
+# A messages JSONL (chat format) — one {"messages":[…]} per line, each with an assistant turn.
+spark finetune start ~/datasets/house-style.jsonl --epochs 3 --max-hours 3
+spark finetune status                            # progress, ETA, live session
+spark finetune pause                             # stop cleanly after the next checkpoint
+spark finetune resume                            # continue from there, another time-boxed chunk
+spark llm serve house-style                          # serve the merged GGUF it published
+```
+
+**Fine-tune vs RAG.** Fine-tuning teaches *style/behavior*, **not facts** — to answer
+*from* a knowledge base, use retrieval (RAG) at inference time, not fine-tuning.
+
+**Source-agnostic by design.** spark is the *engine*: it consumes a standard
+**`messages` JSONL** (the same OpenAI chat shape `spark llm serve` exposes, so the
+train-time chat template matches serve time) and trains. **Producing** that dataset
+(KB→pairs, RAG export, harvesting PR reviews/docstrings, dedup/quality-filtering) is
+**upstream and your responsibility** — it stays in your own tooling, never in this
+public tool. The dataset is validated upfront (schema + line numbers) so a bad line
+fails in seconds, not after the multi-minute base load.
+
+A run is **time-boxed and resumable** (`--max-hours` auto-stops just after a
+checkpoint; `finetune resume` continues), and the box does *only* fine-tuning while a
+session is live (`--free` stops a resident ComfyUI / llama-server first). Defaults are
+research-backed and overridable: **QLoRA 4-bit** (`--no-quant` for full-precision
+LoRA), **LoRA rank 64**, **lr 2e-4**, **3 epochs**. The base defaults to
+`finetune_base_model` (an Unsloth `*-bnb-4bit` coder); override with `--base <hf-repo>`
+(any Unsloth-supported arch — no hard enum). On completion the LoRA is merged and
+exported to **GGUF** (`q4_k_m`), published into `models_dir` as
+`<name>/<name>.<quant>.gguf` for `spark llm serve <name>`; the adapter is retained for
+incremental retrain.
+
+Set a GB10/sm_121-compatible Unsloth image with `spark config set unsloth_image
+<image@sha256:…>` (build-your-own reference:
+[templates/finetune/Dockerfile.reference](templates/finetune/Dockerfile.reference), or
+use a published GB10 image); spark pulls it on first run.
+
+📖 **[docs/finetune.md](docs/finetune.md)** — dataset format, the
+resume-in-chunks workflow, tuning, serving, and troubleshooting.
 
 ## Audio transcription (Whisper)
 

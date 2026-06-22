@@ -1,0 +1,69 @@
+# OPTIONAL REFERENCE — spark does NOT build this image.
+#
+# `spark llm finetune` drives an operator-provided, digest-pinned Unsloth image
+# (cfg.unsloth_image), exactly like it drives the operator-provided ai-toolkit and
+# ComfyUI images — so Unsloth's GB10/sm_121 dep tree stays OUT of this repo. This
+# file is here only for an operator who wants to build their own image. Build it,
+# digest-pin it, and point spark at it:
+#
+#   docker build -t my-unsloth:gb10 -f Dockerfile.reference .
+#   spark config set unsloth_image my-unsloth:gb10@sha256:<digest>
+#
+# Trust / supply chain: this builds FROM NVIDIA's signed NGC registry
+# (nvcr.io/nvidia/pytorch) using NVIDIA's own DGX Spark Unsloth recipe
+# (build.nvidia.com/spark/unsloth) — you own the supply chain; digest-pin the result
+# (see docs/secure-deployment.md). If you'd rather pull a prebuilt image, prefer the
+# Unsloth ORG's own (`unsloth/unsloth:dgxspark-latest`) over a community/individual
+# image (e.g. `gogamza/unsloth-vllm-gb10`, a community build by haven-jeon) — the
+# latter are UNVETTED; read the Dockerfile and pin a @sha256: digest before trusting one.
+#
+# Why this is light: the NGC PyTorch base already ships torch / CUDA / triton /
+# xformers built + tuned for GB10 (sm_121), so Unsloth installs with `--no-deps` —
+# pip must NOT pull generic wheels that overwrite the NGC-tuned stack. No from-source
+# builds.
+#
+# The image contract spark relies on: python3 on PATH; an Unsloth stack that imports
+# + runs on sm_121 (`unsloth`, `unsloth_zoo`, `trl`, `transformers`, `peft`,
+# `datasets`, `bitsandbytes`); and a llama.cpp converter for the GGUF export step.
+# spark supplies the training script itself (templates/finetune/unsloth_train.py).
+#
+# Source: NVIDIA DGX Spark playbook — github.com/NVIDIA/dgx-spark-playbooks
+#         (nvidia/unsloth) + build.nvidia.com/spark/unsloth.
+
+ARG BASE_IMAGE=nvcr.io/nvidia/pytorch:25.11-py3
+FROM ${BASE_IMAGE}
+
+ENV DEBIAN_FRONTEND=noninteractive \
+    HF_HOME=/cache/huggingface \
+    PIP_NO_CACHE_DIR=1
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        git git-lfs build-essential cmake ca-certificates && \
+    rm -rf /var/lib/apt/lists/* && git lfs install
+
+# NVIDIA's official DGX Spark Unsloth recipe: dependencies first, then unsloth with
+# --no-deps so pip can't overwrite the NGC base's GB10-tuned torch/CUDA/triton/xformers.
+RUN pip install --upgrade pip && \
+    pip install transformers peft hf_transfer "datasets==4.3.0" "trl==0.26.1" && \
+    pip install --no-deps unsloth unsloth_zoo bitsandbytes
+
+# llama.cpp converter for the GGUF export step (Unsloth shells out to it). Baking it in
+# keeps the merge→GGUF export offline + reproducible (Unsloth can also clone on demand).
+# CUDA arch 121 = GB10/sm_121.
+RUN git clone --depth 1 https://github.com/ggerganov/llama.cpp /opt/llama.cpp && \
+    cmake -S /opt/llama.cpp -B /opt/llama.cpp/build -DGGML_CUDA=ON \
+          -DCMAKE_CUDA_ARCHITECTURES=121 && \
+    cmake --build /opt/llama.cpp/build --target llama-quantize -j
+
+# GGUF-convert Python deps for the export step. Do NOT `pip install -r
+# llama.cpp/requirements.txt` — it pins a CPU torch wheel that overwrites the NGC base's
+# GPU torch (→ "Unsloth cannot find any torch accelerator"). Install only the non-torch
+# convert deps; the NGC GPU torch stays intact.
+RUN pip install --no-deps gguf && \
+    pip install numpy sentencepiece protobuf safetensors
+
+# Fail the build loudly if any step above swapped the NGC GPU torch for a CPU build.
+RUN python3 -c "import torch; assert torch.version.cuda, f'CPU torch leaked in ({torch.__version__})'; print('torch OK:', torch.__version__, 'cuda', torch.version.cuda)"
+
+WORKDIR /workspace
+ENTRYPOINT ["python3"]
