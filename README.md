@@ -25,7 +25,7 @@ spark init
 ```
 spark init                                        First-time setup — create ~/.config/spark.json
 spark status                                      Show all services (LLM, ComfyUI, Whisper, RAM, GPU temp, HF-token presence)
-spark temp                                        GPU temperature, utilization, power, clocks + throttle reasons
+spark temp                                        GPU temp/util/power/clocks + throttle, and what's running (training/inference) + uptime
 spark models                                      List downloaded models with quant and size
 spark disk [--prune]                              DGX disk usage by consumer; --prune reclaims Docker space
 

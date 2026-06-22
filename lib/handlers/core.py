@@ -390,8 +390,64 @@ def _gpu_query(cfg):
             "throttling": [l for l, t in active if t]}
 
 
+def _dur(seconds) -> str:
+    """Compact duration: 90 -> '1m30s', 6201 -> '1h43m', 90000 -> '1d1h'."""
+    try:
+        s = int(float(seconds))
+    except (TypeError, ValueError):
+        return "?"
+    d, s = divmod(s, 86400)
+    h, s = divmod(s, 3600)
+    m, s = divmod(s, 60)
+    if d:
+        return f"{d}d{h}h"
+    if h:
+        return f"{h}h{m:02d}m"
+    if m:
+        return f"{m}m{s:02d}s"
+    return f"{s}s"
+
+
+def _active_gpu_workloads(cfg: dict) -> list:
+    """What's actively using the GPU, with how long it's been running:
+    a live training run (the spark-train-<name> container is ground truth — state
+    files can go stale) and any running llama-servers. [{kind, detail, uptime}]."""
+    import re
+    work = []
+    # Training — a running container is the authoritative signal.
+    try:
+        name = ssh(cfg, _docker_env(cfg) + "docker ps --filter name=spark-train- "
+                   "--format '{{.Names}}' 2>/dev/null | head -1").strip()
+    except Exception:
+        name = ""
+    if name.startswith("spark-train-"):
+        run = name[len("spark-train-"):]
+        st = None
+        if re.fullmatch(r"[A-Za-z0-9_-]+", run):   # safe to interpolate
+            raw = ssh(cfg, f"cat {cfg['train_dir'].rstrip('/')}/state/{run}.json 2>/dev/null || true")
+            try:
+                st = json.loads(raw) if raw.strip() else None
+            except ValueError:
+                st = None
+        if st:
+            cur, tgt = st.get("current_step", 0), st.get("target_steps", 0)
+            pct = f" ({100 * cur // tgt}%)" if tgt else ""
+            work.append({"kind": "training", "detail": f"{run} — step {cur}/{tgt}{pct}",
+                         "uptime": _dur(st.get("elapsed_seconds"))})
+        else:
+            work.append({"kind": "training", "detail": run, "uptime": "?"})
+    # Inference — running llama-servers; uptime from the process elapsed time.
+    for i in _llm_instances(cfg):
+        et = ssh(cfg, f"ps -o etimes= -p {int(i['pid'])} 2>/dev/null || true").strip()
+        work.append({"kind": "inference",
+                     "detail": f"{i['name']} {i['quant']} :{i['port']}",
+                     "uptime": _dur(et) if et.isdigit() else "?"})
+    return work
+
+
 def temp(params, cfg):
-    """Show GPU temperature, utilization, power, SM clock + active throttle reasons.
+    """Show GPU temperature, utilization, power, SM clock + active throttle reasons,
+    plus what's running on the GPU (training / inference) and for how long.
     Read-only; thermal SAFETY throttling is automatic in GB10 hardware regardless."""
     g = _gpu_query(cfg)
     if not g:
@@ -415,8 +471,16 @@ def temp(params, cfg):
         print(f"  Clocks    {dim(', '.join(g['reasons']))}")
     else:
         print(f"  Throttle  {green('none')}")
+    # What's actually running on the GPU, and for how long.
+    work = _active_gpu_workloads(cfg)
+    if work:
+        print(f"  Running   {work[0]['kind']}  {work[0]['detail']}  {dim('up ' + work[0]['uptime'])}")
+        for w in work[1:]:
+            print(f"            {w['kind']}  {w['detail']}  {dim('up ' + w['uptime'])}")
+    else:
+        print(f"  Running   {dim('nothing (no training run or inference server)')}")
     print(dim("  Thermal-safety throttling is automatic in GB10 hardware."))
-    return {"action": "core.temp", "available": True, **g}
+    return {"action": "core.temp", "available": True, "workloads": work, **g}
 
 
 def disk(params, cfg):
