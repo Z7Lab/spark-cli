@@ -123,6 +123,21 @@ class TestTrainHelpers(unittest.TestCase):
         wd = Path(__file__).resolve().parent.parent / "bin" / "spark_watchdog.py"
         self.assertTrue(wd.is_file(), "bin/spark_watchdog.py missing")
 
+    def test_sample_refuses_when_box_busy(self):
+        # A sample runs as a bare `docker compose run` (not a training screen), so the
+        # busy-guard must catch a live spark-train/finetune container — else concurrent
+        # samples collide on the GPU + the shared throwaway dir.
+        orig = {k: getattr(train, k) for k in ("_latest_lora", "docker_probe")}
+        self.addCleanup(lambda: [setattr(train, k, v) for k, v in orig.items()])
+        train._session_running = lambda cfg: False
+        train._latest_lora = lambda cfg, name: "/srv/spark-train/output/mystyle/mystyle.safetensors"
+        train.docker_probe = lambda cfg: ("ok", "")
+        train.ssh = lambda cfg, cmd, **kw: "spark-train-mystyle" if "docker ps" in cmd else ""
+        r = self._call(train.sample, {"name": "mystyle", "prompt": ["trg a scene"],
+                                      "seed": None, "width": 1024, "height": 1024,
+                                      "steps": 20, "out": None})
+        self.assertFalse(r["sampled"])
+
 
 class TestWatchdog(unittest.TestCase):
     def test_latest_step_parses_and_ignores_optimizer(self):

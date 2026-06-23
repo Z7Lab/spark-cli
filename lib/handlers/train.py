@@ -716,6 +716,18 @@ def sample(params, cfg):
         print(fail("Cannot sample — Docker is not usable on the DGX:"))
         print_docker_remedy(cfg, state); sys.exit(1)
 
+    # The box runs ONE GPU job at a time. `_session_running` only catches a training
+    # *screen*; a sample (or a fine-tune) runs as a bare `docker compose run`, so two
+    # would collide on the GPU and the shared throwaway dir. Refuse if any spark
+    # train/fine-tune container is already live (covers concurrent samples too — they
+    # run in the `spark-train` compose project, so the name matches).
+    busy = ssh(cfg, _docker_env(cfg) + "docker ps --format '{{.Names}}' 2>/dev/null "
+               "| grep -E 'spark-(train|finetune)' || true").strip()
+    if busy:
+        print(warn(f"The box is busy — '{busy.splitlines()[0]}' is running."))
+        print(dim("  One train / fine-tune / sample run uses the GPU at a time — wait, then re-run."))
+        return {"action": "train.sample", "name": name, "sampled": False}
+
     _deploy_assets(cfg)
     _ensure_image(cfg)
     v = _run_values(cfg, name)
