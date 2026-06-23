@@ -726,7 +726,12 @@ def sample(params, cfg):
     samples = f"{sample_dir}/samples"
     ssh(cfg, f"rm -rf {shlex.quote(sample_dir)}")   # fresh throwaway
 
-    cfg_local = _render_sample_config(cfg, name, prompts, v, lora,
+    # ai-toolkit runs in the container, which bind-mounts the run output at
+    # /workspace/output — so pretrained_lora_path must be the CONTAINER path, not the
+    # host path _latest_lora returns. (A host path silently fails: ai-toolkit logs
+    # "Pretrained lora path from config does not exist" and renders base-only.)
+    lora_in_container = f"/workspace/output/{name}/{Path(lora).name}"
+    cfg_local = _render_sample_config(cfg, name, prompts, v, lora_in_container,
                                       params["width"], params["height"], params["steps"], seed)
     remote_cfg = f"{p['root']}/configs/{sample_run}.yaml"
     if not _scp(cfg, cfg_local, remote_cfg):

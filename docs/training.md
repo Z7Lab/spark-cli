@@ -253,7 +253,8 @@ inline).
 | Piece | Where |
 |-------|-------|
 | Host-side verbs (deploy, stage, launch, control, publish) | [../lib/handlers/train.py](../lib/handlers/train.py) |
-| In-container watchdog (time-budget safe-stop, checkpoint detection) | [../bin/spark_train.py](../bin/spark_train.py) |
+| In-container watchdog wrapper (ai-toolkit checkpoint detection) | [../bin/spark_train.py](../bin/spark_train.py) |
+| Shared time-budget safe-stop / pause / resume loop (also used by `spark finetune`) | [../bin/spark_watchdog.py](../bin/spark_watchdog.py) |
 | Orchestration deployed to the box (compose + ai-toolkit config template) | [../templates/train/](../templates/train/) |
 | Build-your-own image reference (NOT built by spark) | [../templates/train/Dockerfile.reference](../templates/train/Dockerfile.reference) |
 | Inference wiring (`--lora`) | `generate()` in [../lib/handlers/comfy.py](../lib/handlers/comfy.py) |
@@ -262,7 +263,7 @@ inline).
 Remote layout under `{train_dir}` (default `~/spark-train`):
 
 ```
-compose.yaml  bin/spark_train.py               # deployed orchestration (no Dockerfile)
+compose.yaml  bin/spark_train.py  bin/spark_watchdog.py   # deployed orchestration (no Dockerfile)
 datasets/<name>/   configs/<name>.yaml         # staged corpus + rendered config
 output/<name>/     state/<name>.json           # checkpoints + run state
 output/<name>/samples/                         # ai-toolkit sample images per checkpoint
