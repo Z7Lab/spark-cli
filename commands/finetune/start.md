@@ -44,7 +44,9 @@ example:
 
 The dataset is **validated upfront** (schema + line numbers) before the expensive
 run, so a bad line fails in seconds rather than after the multi-minute base load.
-Every example needs at least one `assistant` turn (that's the target).
+Every example needs at least one `assistant` turn (that's the target). Tool-calling
+datasets are supported too — assistant `tool_calls` plus an optional per-line `tools`
+schema and `tool`-role results (see `docs/finetune.md`).
 
 The base defaults to `finetune_base_model` (an Unsloth `*-bnb-4bit` coder built for
 QLoRA); override per run with `--base <hf-repo>`. Any Unsloth-supported arch works

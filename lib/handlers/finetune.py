@@ -141,23 +141,39 @@ def _validate_dataset(path: Path) -> tuple[int, list[str]]:
             errors.append(f"line {lineno}: invalid JSON ({e})")
         else:
             msgs = obj.get("messages") if isinstance(obj, dict) else None
+            tools = obj.get("tools") if isinstance(obj, dict) else None
+            bad = False
+            if tools is not None and not isinstance(tools, list):
+                errors.append(f"line {lineno}: 'tools' must be a list of tool schemas"); bad = True
             if not isinstance(msgs, list) or not msgs:
-                errors.append(f"line {lineno}: missing non-empty 'messages' array")
-            else:
-                bad = False
+                errors.append(f"line {lineno}: missing non-empty 'messages' array"); bad = True
+            if not bad:
                 for j, m in enumerate(msgs):
                     if not isinstance(m, dict):
                         errors.append(f"line {lineno}: messages[{j}] is not an object"); bad = True; break
                     if m.get("role") not in _FT_VALID_ROLES:
                         errors.append(f"line {lineno}: messages[{j}] role {m.get('role')!r} "
                                       f"not one of {sorted(_FT_VALID_ROLES)}"); bad = True; break
-                    if not isinstance(m.get("content"), str) or not m["content"].strip():
+                    has_text = isinstance(m.get("content"), str) and bool(m["content"].strip())
+                    tcs = m.get("tool_calls")
+                    if m["role"] == "assistant" and tcs:
+                        # a tool-call turn — content is optional, but tool_calls must be a
+                        # list of objects each carrying function.name (OpenAI/Qwen shape).
+                        if not (isinstance(tcs, list) and tcs and all(
+                                isinstance(tc, dict) and isinstance(tc.get("function"), dict)
+                                and tc["function"].get("name") for tc in tcs)):
+                            errors.append(f"line {lineno}: messages[{j}] tool_calls must be a list of "
+                                          "objects with function.name"); bad = True; break
+                    elif not has_text:
                         errors.append(f"line {lineno}: messages[{j}] has empty/non-string content"); bad = True; break
-                if not bad:
-                    if not any(m.get("role") == "assistant" for m in msgs):
-                        errors.append(f"line {lineno}: no assistant turn (nothing to train on)")
-                    else:
-                        n += 1
+            if not bad:
+                # target = an assistant turn carrying text OR a tool call
+                if not any(m.get("role") == "assistant" and
+                           ((isinstance(m.get("content"), str) and m["content"].strip()) or m.get("tool_calls"))
+                           for m in msgs):
+                    errors.append(f"line {lineno}: no assistant turn (nothing to train on)")
+                else:
+                    n += 1
         if len(errors) >= 20:
             errors.append("… (further errors suppressed — fix these first)")
             break

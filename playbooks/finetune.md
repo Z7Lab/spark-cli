@@ -99,6 +99,20 @@ shape `spark llm serve` exposes, so the train-time chat template matches serve t
   upstream of spark (see **scope**).
 - Optional: a held-out `--eval <messages.jsonl>` logs eval loss for an overfit signal.
 
+**What to fine-tune for.** Fine-tuning teaches *style / behavior / format*, not facts
+(for facts, use retrieval, not fine-tuning). Strong fits:
+- **System-prompt adherence** — make the model obey system rules it otherwise ignores;
+  build pairs with *varied* system prompts the assistant visibly follows (include
+  contrastive cases: same user, different system → different answer).
+- **House style** — your code conventions, tone, response shape.
+- **Tool calling** — train on tool-call data: `messages` with assistant `tool_calls` + a
+  per-row `tools` schema (and optional `tool`-role results); the validator and chat
+  template handle them. Caveat: whether the *served* model emits **native `tool_calls`**
+  (vs. the call landing in `message.content`) depends on the **base model** — small coder
+  models tend to emit JSON in content, not the `<tool_call>` form llama.cpp parses. For
+  structured tool calls, start from a base that already passes `spark llm probe`
+  (tool_call) and verify there; don't assume fine-tuning alone gets you native calls.
+
 ## finetune
 
 Run `spark finetune start {dataset} --base {base} --epochs {epochs} --rank {rank}

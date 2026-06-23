@@ -57,15 +57,23 @@ matches inference time:
 ```json
 {"messages": [{"role": "system", "content": "You write Python in my house style."}, {"role": "user", "content": "Write a retry decorator with backoff."}, {"role": "assistant", "content": "import time\n\ndef retry(times=3, backoff=0.5):\n    ..."}]}
 {"messages": [{"role": "user", "content": "Refactor this for readability:\n..."}, {"role": "assistant", "content": "..."}]}
+{"tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}], "messages": [{"role": "user", "content": "Weather in Paris?"}, {"role": "assistant", "content": "", "tool_calls": [{"id": "c1", "type": "function", "function": {"name": "get_weather", "arguments": "{\"city\": \"Paris\"}"}}]}, {"role": "tool", "content": "18C", "tool_call_id": "c1"}, {"role": "assistant", "content": "It's 18°C in Paris."}]}
 ```
 
 Rules spark enforces (validated **upfront**, before the run):
 
 - Each line is a JSON object with a non-empty `messages` array.
-- Each message has a `role` (`system` / `user` / `assistant` / `tool`) and a non-empty
-  string `content`.
-- Each example has **at least one `assistant` turn** — that's the training target.
+- Each message has a `role` (`system` / `user` / `assistant` / `tool`) and non-empty
+  string `content` — except an `assistant` tool-call turn, where `content` may be empty
+  if it carries a `tool_calls` list (each with `function.name`).
+- Each example has **at least one `assistant` turn** (text *or* a tool call) — the target.
 - `system` prompts and multi-turn conversations are supported (free with `messages`).
+- **Tool calling** is supported as a *training format*: add an optional per-line `tools`
+  array (the schema), assistant `tool_calls`, and `tool`-role results — they flow into the
+  chat template (`tools=`). Whether the *served* model emits **native `tool_calls`** (vs.
+  the call landing in `message.content`) depends on the base model's tool-format adherence:
+  small coder models often emit JSON in content rather than the `<tool_call>` form
+  llama.cpp parses into structured calls. Verify the result with `spark llm probe`.
 
 Validation reports **line numbers** and fails in seconds, so a malformed line never
 costs you a multi-minute base load. Fix what it reports and re-run.

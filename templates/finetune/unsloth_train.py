@@ -62,18 +62,27 @@ def _filtered_kwargs(config_cls, kw: dict) -> dict:
 
 
 def _load_messages_dataset(path: str, tokenizer):
-    """Load a `messages` JSONL file and render each row to a single `text` field
-    via the model's chat template (train-time template == serve-time template)."""
-    from datasets import load_dataset
+    """Load a `messages` JSONL and render each row to a single `text` field via the
+    model's chat template (train-time template == serve-time template).
 
-    ds = load_dataset("json", data_files=path, split="train")
+    Reads the JSON directly rather than via `load_dataset("json")` so heterogeneous
+    tool-calling rows render correctly — assistant `tool_calls`, `tool`-role results, and
+    an optional per-row `tools` schema would otherwise trip Arrow's nested-schema
+    inference. `tools=` is passed through so tool definitions land in the prompt (a no-op
+    for plain chat rows, where it's None)."""
+    from datasets import Dataset
 
-    def render(example):
-        return {"text": tokenizer.apply_chat_template(
-            example["messages"], tokenize=False, add_generation_prompt=False)}
-
-    # Drop the raw columns so only `text` reaches the collator.
-    return ds.map(render, remove_columns=list(ds.column_names))
+    rows = []
+    with open(path) as fh:
+        for line in fh:
+            line = line.strip()
+            if not line:
+                continue
+            row = json.loads(line)
+            rows.append({"text": tokenizer.apply_chat_template(
+                row["messages"], tools=row.get("tools"),
+                tokenize=False, add_generation_prompt=False)})
+    return Dataset.from_list(rows)
 
 
 def main() -> int:

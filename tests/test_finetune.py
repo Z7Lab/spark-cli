@@ -85,6 +85,37 @@ class TestFinetuneHelpers(unittest.TestCase):
         self.assertIn("line 4", joined)
         self.assertIn("line 5", joined)
 
+    def test_validate_accepts_tool_calls(self):
+        # tool-calling row: tools schema + assistant tool_call (empty content) + tool result
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps({
+                "tools": [{"type": "function", "function": {"name": "get_weather"}}],
+                "messages": [
+                    {"role": "user", "content": "Weather in Paris?"},
+                    {"role": "assistant", "content": "", "tool_calls": [
+                        {"id": "c1", "type": "function",
+                         "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+                    {"role": "tool", "content": "18C sunny", "tool_call_id": "c1"},
+                    {"role": "assistant", "content": "It's 18C and sunny in Paris."},
+                ]}) + "\n")
+            path = Path(f.name)
+        n, errors = ft._validate_dataset(path)
+        self.assertEqual(errors, [])
+        self.assertEqual(n, 1)
+
+    def test_validate_rejects_bad_tool_calls(self):
+        # assistant with empty content AND malformed tool_calls (no function.name) → rejected
+        with tempfile.NamedTemporaryFile("w", suffix=".jsonl", delete=False) as f:
+            f.write(json.dumps({"messages": [
+                {"role": "user", "content": "hi"},
+                {"role": "assistant", "content": "",
+                 "tool_calls": [{"id": "c1", "type": "function", "function": {}}]},
+            ]}) + "\n")
+            path = Path(f.name)
+        n, errors = ft._validate_dataset(path)
+        self.assertEqual(n, 0)
+        self.assertTrue(any("tool_calls" in e for e in errors))
+
     def test_target_steps_math(self):
         # effective batch = 2×4 = 8 → ceil(20/8)=3 steps/epoch × 3 epochs = 9
         self.assertEqual(ft._ft_target_steps(20, 3), 9)
